@@ -1,0 +1,19 @@
+{
+  "name": "maqsis-simple",
+  "version": "1.0.0",
+  "description": "Control simple de horas de maquinaria — Node.js + MySQL",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.3",
+    "mysql2": "^3.11.0"
+  }
+}

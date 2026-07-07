@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MAQSIS — Control de maquinaria</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="styles.css" rel="stylesheet">
+</head>
+<body>
+  <!-- Barra superior -->
+  <header class="navbar navbar-dark bg-dark sticky-top">
+    <div class="container-fluid">
+      <div class="d-flex align-items-center gap-2">
+        <button class="btn btn-dark border-0 d-md-none px-2" type="button"
+          data-bs-toggle="offcanvas" data-bs-target="#sidebar" aria-label="Menú">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <span class="navbar-brand mb-0 h1 fs-5">MAQSIS</span>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <span class="text-white-50 small d-none d-sm-inline" id="navUsuario"></span>
+        <button type="button" class="btn btn-outline-light btn-sm" id="btnLogout">Salir</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="app-layout">
+    <!-- Sidebar (drawer en móvil, fijo en escritorio) -->
+    <div class="offcanvas-md offcanvas-start app-sidebar" tabindex="-1" id="sidebar">
+      <div class="offcanvas-header border-bottom d-md-none">
+        <h5 class="offcanvas-title">Menú</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#sidebar"></button>
+      </div>
+      <div class="offcanvas-body p-0">
+        <nav class="nav nav-pills flex-column p-2 w-100" id="mainNav">
+          <button class="nav-link text-start active" data-tab="inicio" data-perm-tab="inicio">Inicio</button>
+          <button class="nav-link text-start" data-tab="registrar" data-perm-tab="registrar">Registrar horas</button>
+          <button class="nav-link text-start" data-tab="historial" data-perm-tab="historial">Historial</button>
+          <button class="nav-link text-start" data-tab="clientes" data-perm-tab="clientes">Clientes</button>
+          <button class="nav-link text-start" data-tab="maquinaria" data-perm-tab="maquinaria">Máquinas</button>
+          <button class="nav-link text-start" data-tab="gastos" data-perm-tab="gastos">Gastos</button>
+          <button class="nav-link text-start" data-tab="reportes" data-perm-tab="reportes">Reportes</button>
+          <button class="nav-link text-start d-none" data-tab="usuarios" data-perm-tab="usuarios">Usuarios</button>
+        </nav>
+      </div>
+    </div>
+
+    <!-- Contenido -->
+    <main class="app-main">
+      <!-- INICIO -->
+      <section id="tab-inicio" class="tab-pane">
+        <div class="row g-2 mb-3">
+          <div class="col-4">
+            <div class="card border-0 shadow-sm h-100 kpi-card">
+              <div class="card-body p-2 p-sm-3">
+                <div class="text-muted small">Ingresos</div>
+                <div class="kpi-value text-success" id="kpiIngresos">S/ 0.00</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-4">
+            <div class="card border-0 shadow-sm h-100 kpi-card">
+              <div class="card-body p-2 p-sm-3">
+                <div class="text-muted small">Horas</div>
+                <div class="kpi-value" id="kpiHoras">0</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-4">
+            <div class="card border-0 shadow-sm h-100 kpi-card">
+              <div class="card-body p-2 p-sm-3">
+                <div class="text-muted small">En curso</div>
+                <div class="kpi-value text-warning" id="kpiEnCurso">0</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-2 mb-3 align-items-end">
+          <div class="col-5 col-sm-auto">
+            <label class="form-label small mb-0">Desde</label>
+            <input type="date" class="form-control form-control-sm" id="filtroDesde">
+          </div>
+          <div class="col-5 col-sm-auto">
+            <label class="form-label small mb-0">Hasta</label>
+            <input type="date" class="form-control form-control-sm" id="filtroHasta">
+          </div>
+          <div class="col-2 col-sm-auto">
+            <button class="btn btn-primary btn-sm w-100" id="btnFiltrar">↻</button>
+          </div>
+        </div>
+
+        <h6 class="fw-semibold">Ingresos por máquina</h6>
+        <div class="table-responsive mb-4">
+          <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+              <tr><th>Máquina</th><th>Horas</th><th>Ingresos</th></tr>
+            </thead>
+            <tbody id="tablaPorMaquina"></tbody>
+          </table>
+        </div>
+
+        <h6 class="fw-semibold">Turnos en curso</h6>
+        <div id="listaEnCurso" class="list-group"></div>
+      </section>
+
+      <!-- REGISTRAR -->
+      <section id="tab-registrar" class="tab-pane d-none">
+        <div class="card shadow-sm mb-3">
+          <div class="card-header py-2">Iniciar turno</div>
+          <div class="card-body">
+            <form id="formIniciar">
+              <div class="mb-2">
+                <label class="form-label">Maquinaria</label>
+                <select class="form-select" id="iniMaquinaria" required></select>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Cliente</label>
+                <input type="hidden" id="iniCliente">
+                <div class="input-group">
+                  <input type="text" class="form-control" id="iniClienteNombre" readonly placeholder="Sin cliente">
+                  <button type="button" class="btn btn-outline-primary" id="btnElegirClienteIni">Elegir</button>
+                </div>
+                <div class="form-text" id="iniClienteInfo"></div>
+              </div>
+              <div class="row">
+                <div class="col-7 mb-2">
+                  <label class="form-label">Hora inicio</label>
+                  <input type="datetime-local" class="form-control" id="iniHora" required>
+                </div>
+                <div class="col-5 mb-2">
+                  <label class="form-label">Horómetro</label>
+                  <input type="number" step="0.1" min="0" class="form-control" id="iniHorometro" placeholder="Ej. 7092.6">
+                </div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Ubicación / obra</label>
+                <input type="text" class="form-control" id="iniUbicacion" placeholder="Ej. Av. Industrial 120, Lurín">
+              </div>
+              <button type="button" class="btn btn-outline-secondary btn-sm mb-2" id="btnGpsIniciar">Usar mi ubicación GPS</button>
+              <div class="small text-muted mb-2" id="gpsIniciarInfo"></div>
+              <button type="submit" class="btn btn-success w-100">Iniciar turno</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="card shadow-sm">
+          <div class="card-header py-2">Registro completo (inicio y fin)</div>
+          <div class="card-body">
+            <form id="formCompleto">
+              <div class="mb-2">
+                <label class="form-label">Maquinaria</label>
+                <select class="form-select" id="compMaquinaria" required></select>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Cliente</label>
+                <select class="form-select" id="compCliente"><option value="">— Sin cliente —</option></select>
+              </div>
+              <div class="row">
+                <div class="col-6 mb-2">
+                  <label class="form-label">Hora inicio</label>
+                  <input type="datetime-local" class="form-control" id="compInicio" required>
+                </div>
+                <div class="col-6 mb-2">
+                  <label class="form-label">Hora fin</label>
+                  <input type="datetime-local" class="form-control" id="compFin" required>
+                </div>
+                <div class="col-6 mb-2">
+                  <label class="form-label">Horómetro inicio</label>
+                  <input type="number" step="0.1" min="0" class="form-control" id="compHorometroIni">
+                </div>
+                <div class="col-6 mb-2">
+                  <label class="form-label">Horómetro fin</label>
+                  <input type="number" step="0.1" min="0" class="form-control" id="compHorometroFin">
+                </div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Ubicación</label>
+                <input type="text" class="form-control" id="compUbicacion">
+              </div>
+              <button type="button" class="btn btn-outline-secondary btn-sm mb-2" id="btnGpsCompleto">Usar GPS</button>
+              <div class="small text-muted mb-2" id="gpsCompletoInfo"></div>
+              <button type="submit" class="btn btn-primary w-100">Guardar registro</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- HISTORIAL -->
+      <section id="tab-historial" class="tab-pane d-none">
+        <div class="table-responsive">
+          <table class="table table-sm table-striped">
+            <thead>
+              <tr>
+                <th>Máquina</th><th>Cliente</th><th>Ubicación</th><th>Inicio</th><th>Fin</th>
+                <th>Horóm.</th><th>Hrs</th><th>Monto</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="tablaHistorial"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- CLIENTES -->
+      <section id="tab-clientes" class="tab-pane d-none">
+        <button type="button" class="btn btn-primary w-100 mb-3" id="btnNuevoCliente" data-perm="clientes_crear">+ Nuevo cliente</button>
+        <ul class="list-group" id="listaClientes"></ul>
+      </section>
+
+      <!-- MAQUINARIA -->
+      <section id="tab-maquinaria" class="tab-pane d-none">
+        <button type="button" class="btn btn-primary w-100 mb-3" id="btnNuevaMaquinaria" data-perm="maquinaria_crear">+ Nueva máquina</button>
+        <ul class="list-group" id="listaMaquinaria"></ul>
+      </section>
+
+      <!-- GASTOS -->
+      <section id="tab-gastos" class="tab-pane d-none">
+        <button type="button" class="btn btn-primary w-100 mb-3" id="btnNuevoGasto" data-perm="gastos_crear">+ Nuevo gasto</button>
+        <div class="row g-2 mb-3 align-items-end">
+          <div class="col-6 col-sm-auto">
+            <label class="form-label small mb-0">Desde</label>
+            <input type="date" class="form-control form-control-sm" id="gastoDesde">
+          </div>
+          <div class="col-6 col-sm-auto">
+            <label class="form-label small mb-0">Hasta</label>
+            <input type="date" class="form-control form-control-sm" id="gastoHasta">
+          </div>
+          <div class="col-8 col-sm-auto">
+            <label class="form-label small mb-0">Tipo</label>
+            <select class="form-select form-select-sm" id="gastoFiltroTipo">
+              <option value="">Todos</option>
+              <option value="COMBUSTIBLE">Combustible</option>
+              <option value="MANTENIMIENTO">Mantenimiento</option>
+            </select>
+          </div>
+          <div class="col-4 col-sm-auto">
+            <button class="btn btn-primary btn-sm w-100" id="btnFiltrarGastos">↻</button>
+          </div>
+        </div>
+        <div class="card border-0 shadow-sm mb-3">
+          <div class="card-body p-2 p-sm-3 d-flex justify-content-between align-items-center">
+            <span class="text-muted small">Total gastos (período)</span>
+            <span class="kpi-value text-danger" id="gastoTotal">S/ 0.00</span>
+          </div>
+        </div>
+        <ul class="list-group" id="listaGastos"></ul>
+      </section>
+
+      <!-- REPORTES -->
+      <section id="tab-reportes" class="tab-pane d-none">
+        <div class="row g-2 mb-3 align-items-end">
+          <div class="col-5 col-sm-auto">
+            <label class="form-label small mb-0">Desde</label>
+            <input type="date" class="form-control form-control-sm" id="repDesde">
+          </div>
+          <div class="col-5 col-sm-auto">
+            <label class="form-label small mb-0">Hasta</label>
+            <input type="date" class="form-control form-control-sm" id="repHasta">
+          </div>
+          <div class="col-2 col-sm-auto">
+            <button class="btn btn-primary btn-sm w-100" id="btnFiltrarReportes">↻</button>
+          </div>
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-4">
+            <div class="card border-0 shadow-sm h-100">
+              <div class="card-body p-2 p-sm-3">
+                <div class="text-muted small">Ingresos</div>
+                <div class="kpi-value text-success" id="repIngresos">S/ 0.00</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-4">
+            <div class="card border-0 shadow-sm h-100">
+              <div class="card-body p-2 p-sm-3">
+                <div class="text-muted small">Gastos</div>
+                <div class="kpi-value text-danger" id="repGastos">S/ 0.00</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-4">
+            <div class="card border-0 shadow-sm h-100">
+              <div class="card-body p-2 p-sm-3">
+                <div class="text-muted small">Utilidad</div>
+                <div class="kpi-value" id="repUtilidad">S/ 0.00</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h6 class="fw-semibold">Rentabilidad por máquina</h6>
+        <p class="text-muted small mb-2">Utilidad = Ingresos − Gastos (combustible + mantenimiento)</p>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Máquina</th>
+                <th class="text-end">Horas</th>
+                <th class="text-end">Ingresos</th>
+                <th class="text-end">Gastos</th>
+                <th class="text-end">Utilidad</th>
+              </tr>
+            </thead>
+            <tbody id="tablaRentabilidad"></tbody>
+            <tfoot class="table-light fw-semibold" id="tablaRentabilidadFoot"></tfoot>
+          </table>
+        </div>
+      </section>
+
+      <!-- USUARIOS (solo admin) -->
+      <section id="tab-usuarios" class="tab-pane d-none">
+        <button type="button" class="btn btn-primary w-100 mb-3" id="btnNuevoUsuario">+ Nuevo usuario</button>
+        <ul class="list-group" id="listaUsuarios"></ul>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal: cerrar turno -->
+  <div class="modal fade" id="modalCerrarTurno" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-fullscreen-sm-down">
+      <div class="modal-content">
+        <div class="modal-header py-2">
+          <h5 class="modal-title fs-6">Cerrar turno</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="formCerrarTurno">
+            <input type="hidden" id="cerrarTurnoId">
+            <div class="mb-2 small text-muted" id="cerrarTurnoInfo"></div>
+            <div class="mb-2">
+              <label class="form-label">Hora fin</label>
+              <input type="datetime-local" class="form-control" id="cerrarHoraFin" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Horómetro fin</label>
+              <input type="number" step="0.1" min="0" class="form-control" id="cerrarHorometroFin">
+            </div>
+            <button type="submit" class="btn btn-warning w-100">Cerrar turno</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: elegir cliente -->
+  <div class="modal fade" id="modalElegirCliente" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-sm-down">
+      <div class="modal-content">
+        <div class="modal-header py-2">
+          <h5 class="modal-title fs-6">Elegir cliente</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body pt-2">
+          <input type="search" class="form-control mb-3" id="buscarClienteModal" placeholder="Buscar por nombre o documento..." autocomplete="off">
+          <div class="list-group" id="listaClienteModal"></div>
+        </div>
+        <div class="modal-footer py-2">
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="btnSinClienteModal">Sin cliente</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: formulario cliente -->
+  <div class="modal fade" id="modalFormCliente" tabindex="-1">
+    <div class="modal-dialog modal-fullscreen-sm-down">
+      <div class="modal-content">
+        <div class="modal-header py-2">
+          <h5 class="modal-title fs-6" id="modalFormClienteTitulo">Nuevo cliente</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="formCliente">
+            <input type="hidden" id="clienteId">
+            <div class="mb-2">
+              <label class="form-label">RUC / DNI</label>
+              <div class="input-group">
+                <input class="form-control" id="clienteDocumento" placeholder="DNI (8) o RUC (11)" inputmode="numeric">
+                <button type="button" class="btn btn-outline-primary" id="btnBuscarSunat">SUNAT</button>
+              </div>
+              <div class="form-text" id="clienteConsultaInfo"></div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Nombre / Razón social</label>
+              <input class="form-control" id="clienteNombre" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Teléfono</label>
+              <input class="form-control" id="clienteTelefono" inputmode="tel">
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Dirección</label>
+              <input class="form-control" id="clienteDireccion">
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Guardar</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: formulario maquinaria -->
+  <div class="modal fade" id="modalFormMaquinaria" tabindex="-1">
+    <div class="modal-dialog modal-fullscreen-sm-down">
+      <div class="modal-content">
+        <div class="modal-header py-2">
+          <h5 class="modal-title fs-6" id="modalFormMaquinariaTitulo">Nueva máquina</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="formMaquinaria">
+            <input type="hidden" id="maqId">
+            <div class="mb-2">
+              <label class="form-label">Nombre</label>
+              <input class="form-control" id="maqNombre" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Código / placa</label>
+              <input class="form-control" id="maqCodigo">
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Tipo</label>
+              <input class="form-control" id="maqTipo" placeholder="Retro, excavadora...">
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Tarifa por hora (S/)</label>
+              <input type="number" step="0.01" min="0" class="form-control" id="maqTarifa" required>
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Guardar</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: formulario gasto -->
+  <div class="modal fade" id="modalFormGasto" tabindex="-1">
+    <div class="modal-dialog modal-fullscreen-sm-down">
+      <div class="modal-content">
+        <div class="modal-header py-2">
+          <h5 class="modal-title fs-6" id="modalFormGastoTitulo">Nuevo gasto</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="formGasto">
+            <input type="hidden" id="gastoId">
+            <div class="mb-2">
+              <label class="form-label">Tipo de gasto</label>
+              <select class="form-select" id="gastoTipo" required>
+                <option value="COMBUSTIBLE">Combustible</option>
+                <option value="MANTENIMIENTO">Mantenimiento</option>
+              </select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Maquinaria</label>
+              <select class="form-select" id="gastoMaquinaria" required></select>
+            </div>
+            <div class="row">
+              <div class="col-7 mb-2">
+                <label class="form-label">Fecha</label>
+                <input type="date" class="form-control" id="gastoFecha" required>
+              </div>
+              <div class="col-5 mb-2">
+                <label class="form-label">Monto (S/)</label>
+                <input type="number" step="0.01" min="0" class="form-control" id="gastoMonto" required>
+              </div>
+              <div class="col-6 mb-2">
+                <label class="form-label">Horómetro <span class="text-muted small">(opcional)</span></label>
+                <input type="number" step="0.1" min="0" class="form-control" id="gastoHorometro">
+              </div>
+              <div class="col-6 mb-2" id="bloqueGalones">
+                <label class="form-label">Galones</label>
+                <input type="number" step="0.01" min="0" class="form-control" id="gastoGalones">
+              </div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Proveedor</label>
+              <input class="form-control" id="gastoProveedor" placeholder="Grifo, taller...">
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Descripción</label>
+              <input class="form-control" id="gastoDescripcion" placeholder="Detalle del gasto">
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Guardar</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: formulario usuario -->
+  <div class="modal fade" id="modalFormUsuario" tabindex="-1">
+    <div class="modal-dialog modal-fullscreen-sm-down">
+      <div class="modal-content">
+        <div class="modal-header py-2">
+          <h5 class="modal-title fs-6" id="modalFormUsuarioTitulo">Nuevo usuario</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="formUsuario">
+            <input type="hidden" id="usuarioId">
+            <div class="mb-2">
+              <label class="form-label">Usuario (login)</label>
+              <input class="form-control" id="usuarioLogin" required autocomplete="off">
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Nombre completo</label>
+              <input class="form-control" id="usuarioNombre" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label" id="usuarioPasswordLabel">Contraseña</label>
+              <input type="password" class="form-control" id="usuarioPassword" minlength="4" autocomplete="new-password">
+              <div class="form-text" id="usuarioPasswordHint"></div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Rol</label>
+              <select class="form-select" id="usuarioRol">
+                <option value="operador">Operador</option>
+                <option value="admin">Administrador</option>
+              </select>
+            </div>
+            <div class="mb-3" id="bloquePermisosUsuario">
+              <label class="form-label">Permisos</label>
+              <div class="row g-2" id="checksPermisosUsuario"></div>
+            </div>
+            <div class="form-check mb-3">
+              <input class="form-check-input" type="checkbox" id="usuarioActivo" checked>
+              <label class="form-check-label" for="usuarioActivo">Usuario activo</label>
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Guardar</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+body { background: #f0f2f5; }
+.card { border-radius: 0.5rem; }
+.kpi-value { font-size: 1.1rem; font-weight: 600; }
+@media (min-width: 576px) {
+  .kpi-value { font-size: 1.5rem; }
+}
+.list-group-item-action { cursor: pointer; }
+
+/* Layout con sidebar */
+.app-layout { display: flex; align-items: flex-start; }
+.app-main { flex: 1 1 auto; min-width: 0; padding: 1rem; padding-bottom: 3rem; }
+
+.app-sidebar { background: #fff; }
+#mainNav .nav-link {
+  color: #333;
+  border-radius: 0.4rem;
+  margin-bottom: 0.15rem;
+}
+#mainNav .nav-link.active { background-color: #0d6efd; color: #fff; }
+#mainNav .nav-link:not(.active):hover { background-color: #eef1f5; }
+
+@media (min-width: 768px) {
+  .app-sidebar {
+    flex: 0 0 230px;
+    width: 230px;
+    position: sticky;
+    top: 56px;
+    height: calc(100vh - 56px);
+    border-right: 1px solid #dee2e6;
+    overflow-y: auto;
+  }
+  .app-main { padding: 1.25rem 1.5rem; }
+}

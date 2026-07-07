@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Iniciar sesión — MAQSIS</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    }
+    .login-card {
+      width: 100%;
+      max-width: 400px;
+      border-radius: 1rem;
+      box-shadow: 0 1rem 3rem rgba(0,0,0,.35);
+    }
+  </style>
+</head>
+<body>
+  <div class="card login-card">
+    <div class="card-body p-4">
+      <h1 class="h4 text-center mb-1">MAQSIS Simple</h1>
+      <p class="text-muted text-center small mb-4">Control de maquinaria</p>
+      <form id="formLogin">
+        <div class="mb-3">
+          <label class="form-label">Usuario</label>
+          <input type="text" class="form-control" id="usuario" autocomplete="username" required autofocus>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Contraseña</label>
+          <input type="password" class="form-control" id="password" autocomplete="current-password" required>
+        </div>
+        <div class="alert alert-danger d-none" id="errorLogin"></div>
+        <button type="submit" class="btn btn-primary w-100" id="btnLogin">Entrar</button>
+      </form>
+      <p class="text-muted text-center small mt-3 mb-0">
+        Usuario demo: <strong>admin</strong> / <strong>admin123</strong>
+      </p>
+    </div>
+  </div>
+  <script>
+    (async () => {
+      try {
+        const r = await fetch('/api/auth/me', { credentials: 'include' });
+        if (r.ok) location.href = '/';
+      } catch (_) {}
+    })();
+
+    document.getElementById('formLogin').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('errorLogin');
+      const btn = document.getElementById('btnLogin');
+      err.classList.add('d-none');
+      btn.disabled = true;
+      btn.textContent = 'Entrando…';
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            usuario: document.getElementById('usuario').value,
+            password: document.getElementById('password').value
+          })
+        });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.message || 'Error al iniciar sesión');
+        location.href = '/';
+      } catch (ex) {
+        err.textContent = ex.message;
+        err.classList.remove('d-none');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Entrar';
+      }
+    });
+  </script>
+</body>
+</html>

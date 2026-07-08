@@ -7,6 +7,8 @@ const path = require('path');
 const { pool } = require('./db');
 const { signToken, authMiddleware, adminMiddleware, requirePermiso, permisosEfectivos, PERMISOS_OPERADOR, COOKIE_NAME, TOKEN_HOURS } = require('./auth');
 const { consultarDni, consultarRuc } = require('./factiliza');
+const { sendPasswordResetEmail, isMailConfigured } = require('./utils/mailer');
+const { createResetToken, validateResetToken, markTokenUsed } = require('./utils/passwordReset');
 
 const app = express();
 const PORT = process.env.PORT || 3080;
@@ -32,6 +34,30 @@ function toMysqlDatetime(d) {
   if (Number.isNaN(x.getTime())) return null;
   const pad = (n) => String(n).padStart(2, '0');
   return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())} ${pad(x.getHours())}:${pad(x.getMinutes())}:${pad(x.getSeconds())}`;
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+const forgotRateLimit = new Map();
+const FORGOT_RATE_WINDOW_MS = 15 * 60 * 1000;
+const FORGOT_RATE_MAX = 5;
+
+function checkForgotRateLimit(key) {
+  const now = Date.now();
+  const entry = forgotRateLimit.get(key);
+  if (!entry || now - entry.start > FORGOT_RATE_WINDOW_MS) {
+    forgotRateLimit.set(key, { start: now, count: 1 });
+    return true;
+  }
+  if (entry.count >= FORGOT_RATE_MAX) return false;
+  entry.count += 1;
+  return true;
 }
 
 function calcHorasYMonto(horaInicio, horaFin, tarifaHora) {
@@ -94,6 +120,79 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ message: 'Sesión cerrada' });
 });
 
+const FORGOT_PASSWORD_MSG =
+  'Si el correo está registrado, recibirás un enlace para restablecer tu contraseña.';
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    if (!isMailConfigured()) {
+      return res.status(503).json({
+        message: 'La recuperación por correo no está configurada. Contacte al administrador.'
+      });
+    }
+
+    const email = normalizeEmail(req.body?.email);
+    if (!email || !isValidEmail(email)) {
+      return res.status(400).json({ message: 'Ingrese un correo electrónico válido' });
+    }
+
+    const rateKey = `${req.ip || 'unknown'}:${email}`;
+    if (!checkForgotRateLimit(rateKey)) {
+      return res.status(429).json({ message: 'Demasiados intentos. Espere unos minutos e intente de nuevo.' });
+    }
+
+    const [[user]] = await pool.query(
+      'SELECT id, nombre, email FROM usuarios WHERE LOWER(email) = ? AND activo = 1',
+      [email]
+    );
+
+    if (user?.email) {
+      const token = await createResetToken(user.id);
+      const appUrl = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+      const resetUrl = `${appUrl}/reset-password.html?token=${token}`;
+      try {
+        await sendPasswordResetEmail(user.email, resetUrl, user.nombre);
+      } catch (mailErr) {
+        console.error('forgot-password mail:', mailErr.message);
+        return res.status(500).json({ message: 'No se pudo enviar el correo. Intente más tarde.' });
+      }
+    }
+
+    res.json({ message: FORGOT_PASSWORD_MSG });
+  } catch (e) {
+    console.error('forgot-password:', e.message);
+    res.status(500).json({ message: e.message });
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    const password = req.body?.password || '';
+
+    if (!token) {
+      return res.status(400).json({ message: 'Enlace inválido o expirado' });
+    }
+    if (!password || String(password).length < 4) {
+      return res.status(400).json({ message: 'La contraseña debe tener al menos 4 caracteres' });
+    }
+
+    const tokenData = await validateResetToken(token);
+    if (!tokenData) {
+      return res.status(400).json({ message: 'Enlace inválido o expirado' });
+    }
+
+    const hash = bcrypt.hashSync(String(password), 10);
+    await pool.query('UPDATE usuarios SET password_hash = ? WHERE id = ?', [hash, tokenData.idUsuario]);
+    await markTokenUsed(tokenData.tokenId);
+
+    res.json({ message: 'Contraseña actualizada correctamente' });
+  } catch (e) {
+    console.error('reset-password:', e.message);
+    res.status(500).json({ message: e.message });
+  }
+});
+
 app.get('/api/auth/me', authMiddleware, async (req, res) => {
   try {
     const [[row]] = await pool.query(
@@ -124,7 +223,12 @@ app.get('/api/permisos/catalogo', authMiddleware, adminMiddleware, (req, res) =>
 
 // Proteger el resto de /api
 app.use('/api', (req, res, next) => {
-  if (req.path === '/health' || req.path === '/auth/login') return next();
+  if (
+    req.path === '/health'
+    || req.path === '/auth/login'
+    || req.path === '/auth/forgot-password'
+    || req.path === '/auth/reset-password'
+  ) return next();
   authMiddleware(req, res, next);
 });
 
@@ -248,6 +352,32 @@ app.put('/api/maquinaria/:id', requirePermiso('maquinaria_crear'), async (req, r
     );
     res.json({ message: 'Maquinaria actualizada' });
   } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+app.delete('/api/maquinaria/:id', requirePermiso('maquinaria_crear'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const [[maq]] = await pool.query('SELECT id FROM maquinaria WHERE id = ? AND activo = 1', [id]);
+    if (!maq) {
+      return res.status(404).json({ message: 'Maquinaria no encontrada' });
+    }
+
+    const [[enCurso]] = await pool.query(
+      `SELECT id FROM registros_trabajo WHERE id_maquinaria = ? AND estado = 'EN_CURSO' LIMIT 1`,
+      [id]
+    );
+    if (enCurso) {
+      return res.status(400).json({
+        message: 'No se puede dar de baja: tiene un turno en curso. Ciérrelo primero.'
+      });
+    }
+
+    await pool.query('UPDATE maquinaria SET activo = 0 WHERE id = ?', [id]);
+    res.json({ message: 'Maquinaria dada de baja' });
+  } catch (e) {
+    console.error('DELETE maquinaria:', e.message);
     res.status(500).json({ message: e.message });
   }
 });
@@ -500,6 +630,7 @@ function mapUsuarioRow(row) {
     id: row.id,
     usuario: row.usuario,
     nombre: row.nombre,
+    email: row.email || null,
     rol: row.rol || 'operador',
     permisos: Array.isArray(permisos) ? permisos : [],
     activo: !!row.activo,
@@ -510,7 +641,7 @@ function mapUsuarioRow(row) {
 app.get('/api/usuarios', adminMiddleware, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT id, usuario, nombre, rol, permisos, activo,
+      `SELECT id, usuario, nombre, email, rol, permisos, activo,
               CONVERT(creado_en, CHAR) AS creado_en
        FROM usuarios ORDER BY nombre`
     );
@@ -523,13 +654,17 @@ app.get('/api/usuarios', adminMiddleware, async (req, res) => {
 
 app.post('/api/usuarios', adminMiddleware, async (req, res) => {
   try {
-    const { usuario, nombre, password, rol, permisos, activo } = req.body || {};
+    const { usuario, nombre, email, password, rol, permisos, activo } = req.body || {};
     const userLogin = String(usuario || '').trim().toLowerCase();
     const userNombre = String(nombre || '').trim();
+    const userEmail = normalizeEmail(email);
     const userRol = rol === 'admin' ? 'admin' : 'operador';
 
     if (!userLogin || !userNombre) {
       return res.status(400).json({ message: 'Usuario y nombre son obligatorios' });
+    }
+    if (!userEmail || !isValidEmail(userEmail)) {
+      return res.status(400).json({ message: 'Ingrese un correo electrónico válido' });
     }
     if (!password || String(password).length < 4) {
       return res.status(400).json({ message: 'La contraseña debe tener al menos 4 caracteres' });
@@ -541,14 +676,17 @@ app.post('/api/usuarios', adminMiddleware, async (req, res) => {
     const hash = bcrypt.hashSync(String(password), 10);
 
     const [r] = await pool.query(
-      `INSERT INTO usuarios (usuario, nombre, rol, permisos, password_hash, activo)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [userLogin, userNombre, userRol, permisosJson, hash, activo === false ? 0 : 1]
+      `INSERT INTO usuarios (usuario, nombre, email, rol, permisos, password_hash, activo)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [userLogin, userNombre, userEmail, userRol, permisosJson, hash, activo === false ? 0 : 1]
     );
     res.status(201).json({ data: { id: r.insertId }, message: 'Usuario creado' });
   } catch (e) {
     if (e.code === 'ER_DUP_ENTRY') {
-      return res.status(400).json({ message: 'Ese nombre de usuario ya existe' });
+      const msg = String(e.message || '').includes('email')
+        ? 'Ese correo electrónico ya está registrado'
+        : 'Ese nombre de usuario ya existe';
+      return res.status(400).json({ message: msg });
     }
     console.error('POST usuarios:', e.message);
     res.status(500).json({ message: e.message });
@@ -558,12 +696,16 @@ app.post('/api/usuarios', adminMiddleware, async (req, res) => {
 app.put('/api/usuarios/:id', adminMiddleware, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { nombre, password, rol, permisos, activo } = req.body || {};
+    const { nombre, email, password, rol, permisos, activo } = req.body || {};
     const userNombre = String(nombre || '').trim();
+    const userEmail = normalizeEmail(email);
     const userRol = rol === 'admin' ? 'admin' : 'operador';
 
     if (!userNombre) {
       return res.status(400).json({ message: 'El nombre es obligatorio' });
+    }
+    if (!userEmail || !isValidEmail(userEmail)) {
+      return res.status(400).json({ message: 'Ingrese un correo electrónico válido' });
     }
 
     const [[actual]] = await pool.query('SELECT id, rol FROM usuarios WHERE id = ?', [id]);
@@ -588,8 +730,8 @@ app.put('/api/usuarios/:id', adminMiddleware, async (req, res) => {
       Array.isArray(permisos) ? permisos.filter(Boolean) : []
     );
 
-    let sql = `UPDATE usuarios SET nombre = ?, rol = ?, permisos = ?, activo = ?`;
-    const params = [userNombre, userRol, permisosJson, activo === false ? 0 : 1];
+    let sql = `UPDATE usuarios SET nombre = ?, email = ?, rol = ?, permisos = ?, activo = ?`;
+    const params = [userNombre, userEmail, userRol, permisosJson, activo === false ? 0 : 1];
 
     if (password && String(password).trim()) {
       if (String(password).length < 4) {
@@ -604,6 +746,9 @@ app.put('/api/usuarios/:id', adminMiddleware, async (req, res) => {
     await pool.query(sql, params);
     res.json({ message: 'Usuario actualizado' });
   } catch (e) {
+    if (e.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ message: 'Ese correo electrónico ya está registrado' });
+    }
     console.error('PUT usuarios:', e.message);
     res.status(500).json({ message: e.message });
   }

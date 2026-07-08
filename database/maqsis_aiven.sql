@@ -1,12 +1,5 @@
--- MAQSIS Simple — MySQL / phpMyAdmin
--- 1. Crear BD en phpMyAdmin o: CREATE DATABASE maqsislite;
--- 2. Seleccionar la BD e importar este archivo
-
-CREATE DATABASE IF NOT EXISTS maqsislite
-  CHARACTER SET utf8mb4
-  COLLATE utf8mb4_unicode_ci;
-
-USE maqsislite;
+-- MAQSIS Lite — Importar en Aiven (base defaultdb)
+-- No incluye CREATE DATABASE ni USE (Aiven ya tiene defaultdb)
 
 -- Usuarios (login)
 CREATE TABLE IF NOT EXISTS usuarios (
@@ -36,7 +29,6 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 CREATE INDEX idx_reset_token_hash ON password_reset_tokens (token_hash);
 CREATE INDEX idx_reset_usuario ON password_reset_tokens (id_usuario, used_at);
 
--- Usuario inicial: admin / admin123  (cambiar contraseña en producción)
 INSERT INTO usuarios (usuario, nombre, rol, password_hash) VALUES
   ('admin', 'Administrador', 'admin', '$2b$10$pDawaEvO0zB9BxA2JkprtutSgaIedCkpkB1SAo05sY.uIwK3tHJg2')
 ON DUPLICATE KEY UPDATE usuario = usuario;
@@ -63,19 +55,19 @@ CREATE TABLE IF NOT EXISTS maquinaria (
   creado_en     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
--- Registro de trabajo (inicio, fin, ubicación, ingreso)
+-- Registro de trabajo
 CREATE TABLE IF NOT EXISTS registros_trabajo (
   id              INT AUTO_INCREMENT PRIMARY KEY,
   id_maquinaria   INT          NOT NULL,
   id_cliente      INT          NULL,
   hora_inicio     DATETIME     NOT NULL,
-  horometro_inicio DECIMAL(10,1) NULL COMMENT 'Lectura del horómetro al iniciar',
+  horometro_inicio DECIMAL(10,1) NULL,
   hora_fin        DATETIME     NULL,
-  horometro_fin   DECIMAL(10,1) NULL COMMENT 'Lectura del horómetro al cerrar',
-  horas           DECIMAL(10,4) NULL COMMENT 'Calculado al cerrar',
-  tarifa_hora     DECIMAL(12,2) NULL COMMENT 'Tarifa al momento del registro',
-  monto           DECIMAL(12,2) NULL COMMENT 'horas × tarifa',
-  ubicacion       VARCHAR(255) NULL COMMENT 'Obra, dirección o referencia',
+  horometro_fin   DECIMAL(10,1) NULL,
+  horas           DECIMAL(10,4) NULL,
+  tarifa_hora     DECIMAL(12,2) NULL,
+  monto           DECIMAL(12,2) NULL,
+  ubicacion       VARCHAR(255) NULL,
   latitud         DECIMAL(10,7) NULL,
   longitud        DECIMAL(10,7) NULL,
   observaciones   VARCHAR(500) NULL,
@@ -89,15 +81,15 @@ CREATE INDEX idx_reg_maquinaria ON registros_trabajo(id_maquinaria, hora_inicio)
 CREATE INDEX idx_reg_cliente    ON registros_trabajo(id_cliente);
 CREATE INDEX idx_reg_estado     ON registros_trabajo(estado);
 
--- Gastos de maquinaria (combustible / mantenimiento)
+-- Gastos
 CREATE TABLE IF NOT EXISTS gastos (
   id            INT AUTO_INCREMENT PRIMARY KEY,
   id_maquinaria INT           NOT NULL,
   tipo          ENUM('COMBUSTIBLE','MANTENIMIENTO') NOT NULL,
   fecha         DATE          NOT NULL,
-  monto         DECIMAL(12,2) NOT NULL DEFAULT 0 COMMENT 'Costo en soles',
-  horometro     DECIMAL(10,1) NULL COMMENT 'Lectura del horómetro al momento del gasto',
-  galones       DECIMAL(10,2) NULL COMMENT 'Solo combustible',
+  monto         DECIMAL(12,2) NOT NULL DEFAULT 0,
+  horometro     DECIMAL(10,1) NULL,
+  galones       DECIMAL(10,2) NULL,
   proveedor     VARCHAR(150)  NULL,
   descripcion   VARCHAR(300)  NULL,
   activo        TINYINT(1)    NOT NULL DEFAULT 1,

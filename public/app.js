@@ -627,13 +627,29 @@ async function cargarMaquinaria() {
         <strong>${esc(m.nombre)}</strong> <small class="text-muted">(${esc(m.codigo || 's/c')})</small><br>
         <small>${esc(m.tipo || '')} — ${fmtMoney(m.tarifa_hora)}/h</small>
       </div>
-      ${puedeEditar ? `<button class="btn btn-sm btn-outline-secondary flex-shrink-0" data-edit-maq='${JSON.stringify(m).replace(/'/g, "&#39;")}'>Editar</button>` : ''}
+      ${puedeEditar ? `<div class="d-flex gap-1 flex-shrink-0">
+        <button class="btn btn-sm btn-outline-secondary" data-edit-maq='${JSON.stringify(m).replace(/'/g, "&#39;")}'>Editar</button>
+        <button class="btn btn-sm btn-outline-danger" data-del-maq="${m.id}" data-maq-nombre="${esc(m.nombre)}">Baja</button>
+      </div>` : ''}
     </li>
   `).join('') || '<li class="list-group-item text-muted">Sin máquinas</li>';
 
   document.querySelectorAll('[data-edit-maq]').forEach((btn) => {
     btn.addEventListener('click', () => {
       abrirModalMaquinaria(JSON.parse(btn.getAttribute('data-edit-maq')));
+    });
+  });
+  document.querySelectorAll('[data-del-maq]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`¿Dar de baja la máquina "${btn.dataset.maqNombre}"?\nDejará de aparecer en listados, pero se conserva el historial.`)) return;
+      try {
+        await api(`/maquinaria/${btn.dataset.delMaq}`, { method: 'DELETE' });
+        toast('Maquinaria dada de baja', 'success');
+        maquinariaCache = [];
+        cargarMaquinaria();
+      } catch (err) {
+        toast(err.message, 'danger');
+      }
     });
   });
 }
@@ -789,8 +805,9 @@ async function abrirModalUsuario(u = null) {
   await cargarCatalogoPermisos();
   document.getElementById('formUsuario').reset();
   document.getElementById('usuarioId').value = '';
-  document.getElementById('usuarioLogin').disabled = false;
-  document.getElementById('usuarioPassword').required = true;
+    document.getElementById('usuarioLogin').disabled = false;
+    document.getElementById('usuarioEmail').disabled = false;
+    document.getElementById('usuarioPassword').required = true;
   document.getElementById('usuarioPasswordHint').textContent = '';
   document.getElementById('modalFormUsuarioTitulo').textContent = u ? 'Editar usuario' : 'Nuevo usuario';
   document.getElementById('usuarioActivo').checked = true;
@@ -800,6 +817,7 @@ async function abrirModalUsuario(u = null) {
     document.getElementById('usuarioLogin').value = u.usuario;
     document.getElementById('usuarioLogin').disabled = true;
     document.getElementById('usuarioNombre').value = u.nombre;
+    document.getElementById('usuarioEmail').value = u.email || '';
     document.getElementById('usuarioRol').value = u.rol || 'operador';
     document.getElementById('usuarioActivo').checked = !!u.activo;
     document.getElementById('usuarioPassword').required = false;
@@ -820,6 +838,7 @@ document.getElementById('formUsuario').addEventListener('submit', async (e) => {
   const id = document.getElementById('usuarioId').value;
   const payload = {
     nombre: document.getElementById('usuarioNombre').value,
+    email: document.getElementById('usuarioEmail').value,
     rol: document.getElementById('usuarioRol').value,
     permisos: leerPermisosFormulario(),
     activo: document.getElementById('usuarioActivo').checked
@@ -859,7 +878,7 @@ async function cargarUsuarios() {
     <li class="list-group-item d-flex justify-content-between align-items-center gap-2 py-3">
       <div>
         <strong>${esc(u.nombre)}</strong> ${badge} ${estado}<br>
-        <small class="text-muted">@${esc(u.usuario)}</small>
+        <small class="text-muted">@${esc(u.usuario)}${u.email ? ` · ${esc(u.email)}` : ''}</small>
       </div>
       <div class="d-flex gap-1 flex-shrink-0">
         <button class="btn btn-sm btn-outline-secondary" data-edit-usuario='${JSON.stringify(u).replace(/'/g, "&#39;")}'>Editar</button>

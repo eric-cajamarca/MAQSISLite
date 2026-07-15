@@ -11,9 +11,11 @@ const modalFormCliente = new bootstrap.Modal('#modalFormCliente');
 const modalFormMaquinaria = new bootstrap.Modal('#modalFormMaquinaria');
 const modalFormUsuario = new bootstrap.Modal('#modalFormUsuario');
 const modalFormGasto = new bootstrap.Modal('#modalFormGasto');
+const modalTiposGasto = new bootstrap.Modal('#modalTiposGasto');
 const modalCerrarTurno = new bootstrap.Modal('#modalCerrarTurno');
 
 let maquinariaCache = [];
+let tiposGastoCache = [];
 
 function hasPermiso(perm) {
   return !!(currentUser && Array.isArray(currentUser.permisos) && currentUser.permisos.includes(perm));
@@ -167,8 +169,11 @@ async function cargarSelects() {
   });
   document.getElementById('compCliente').innerHTML = optsCli;
   document.getElementById('iniHora').value = nowLocalInput();
-  document.getElementById('compInicio').value = nowLocalInput();
-  document.getElementById('compFin').value = nowLocalInput();
+  if (!document.getElementById('compFecha').value) {
+    document.getElementById('compFecha').value = todayStr();
+  }
+  syncCompTarifaDesdeMaquina();
+  actualizarCompCalcInfo();
 }
 
 function opcionesMaquinaria() {
@@ -293,26 +298,136 @@ document.getElementById('formIniciar').addEventListener('submit', async (e) => {
   }
 });
 
+function syncCompTarifaDesdeMaquina() {
+  const id = document.getElementById('compMaquinaria').value;
+  const m = maquinariaCache.find((x) => String(x.id) === String(id));
+  const tarifaEl = document.getElementById('compTarifa');
+  if (!tarifaEl.dataset.manual || tarifaEl.dataset.manual === '0') {
+    tarifaEl.value = m ? Number(m.tarifa_hora || 0) : '';
+  }
+}
+
+function previewCompCalculo() {
+  const horoIni = document.getElementById('compHorometroIni').value;
+  const horoFin = document.getElementById('compHorometroFin').value;
+  const horaIni = document.getElementById('compInicio').value;
+  const horaFin = document.getElementById('compFin').value;
+  const tarifa = Number(document.getElementById('compTarifa').value) || 0;
+  const montoManual = document.getElementById('compMonto').value;
+
+  const hasHoro = horoIni !== '' && horoFin !== '';
+  const hasReloj = !!(horaIni && horaFin);
+  if (!hasHoro && !hasReloj) return null;
+
+  let horas = null;
+  let base = null;
+  let aviso = null;
+  let horasReloj = null;
+
+  if (hasReloj) {
+    const ini = new Date(horaIni);
+    const fin = new Date(horaFin);
+    if (!Number.isNaN(ini.getTime()) && !Number.isNaN(fin.getTime()) && fin > ini) {
+      horasReloj = (fin - ini) / (1000 * 60 * 60);
+    }
+  }
+  if (hasHoro) {
+    const a = Number(horoIni);
+    const b = Number(horoFin);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return null;
+    horas = b - a;
+    base = 'horometro';
+    if (horasReloj != null && Math.abs(horas - horasReloj) > 0.25) {
+      aviso = `Horómetro (${horas.toFixed(2)} h) ≠ reloj (${horasReloj.toFixed(2)} h): manda horómetro`;
+    }
+  } else if (horasReloj != null) {
+    horas = horasReloj;
+    base = 'reloj';
+  } else {
+    return null;
+  }
+
+  const monto = montoManual !== ''
+    ? Number(montoManual)
+    : Math.round(horas * tarifa * 100) / 100;
+  if (!Number.isFinite(monto)) return null;
+  return { horas, monto, base, aviso };
+}
+
+function actualizarCompCalcInfo() {
+  const info = document.getElementById('compCalcInfo');
+  const p = previewCompCalculo();
+  if (!p) {
+    info.className = 'small text-muted mb-2';
+    info.textContent = 'Cobra por horómetro si hay inicio y fin; si no, por reloj. Puedes editar tarifa o monto.';
+    return;
+  }
+  const baseTxt = p.base === 'horometro' ? 'horómetro' : 'reloj';
+  info.className = p.aviso ? 'small text-warning mb-2' : 'small text-success mb-2';
+  info.textContent = p.aviso
+    || `Vista previa: ${p.horas.toFixed(2)} h (${baseTxt}) → ${fmtMoney(p.monto)}`;
+}
+
+document.getElementById('compMaquinaria').addEventListener('change', () => {
+  document.getElementById('compTarifa').dataset.manual = '0';
+  syncCompTarifaDesdeMaquina();
+  actualizarCompCalcInfo();
+});
+document.getElementById('compTarifa').addEventListener('input', () => {
+  document.getElementById('compTarifa').dataset.manual = '1';
+  actualizarCompCalcInfo();
+});
+['compHorometroIni', 'compHorometroFin', 'compInicio', 'compFin', 'compMonto', 'compFecha'].forEach((id) => {
+  document.getElementById(id).addEventListener('input', actualizarCompCalcInfo);
+});
+
 document.getElementById('formCompleto').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
+    const horoIni = document.getElementById('compHorometroIni').value;
+    const horoFin = document.getElementById('compHorometroFin').value;
+    const horaIni = document.getElementById('compInicio').value;
+    const horaFin = document.getElementById('compFin').value;
+    const fecha = document.getElementById('compFecha').value;
+    const hasHoro = horoIni !== '' && horoFin !== '';
+    const hasReloj = !!(horaIni && horaFin);
+
+    if (!hasHoro && !hasReloj) {
+      throw new Error('Indica horómetro inicio y fin, o hora inicio y fin');
+    }
+    if (!hasReloj && !fecha && !horaIni && !horaFin) {
+      throw new Error('Indica al menos una fecha del trabajo');
+    }
+
     const r = await api('/registros', {
       method: 'POST',
       body: JSON.stringify({
         id_maquinaria: document.getElementById('compMaquinaria').value,
         id_cliente: document.getElementById('compCliente').value || null,
-        hora_inicio: document.getElementById('compInicio').value,
-        hora_fin: document.getElementById('compFin').value,
-        horometro_inicio: document.getElementById('compHorometroIni').value || null,
-        horometro_fin: document.getElementById('compHorometroFin').value || null,
+        fecha: fecha || null,
+        hora_inicio: horaIni || null,
+        hora_fin: horaFin || null,
+        horometro_inicio: horoIni || null,
+        horometro_fin: horoFin || null,
+        tarifa_hora: document.getElementById('compTarifa').value || null,
+        monto: document.getElementById('compMonto').value || null,
         ubicacion: document.getElementById('compUbicacion').value,
         latitud: gpsCompleto.lat,
         longitud: gpsCompleto.lng
       })
     });
-    toast(`Guardado: ${r.data.horas} h → ${fmtMoney(r.data.monto)}`, 'success');
+    const aviso = r.data?.aviso;
+    toast(
+      aviso || `Guardado: ${r.data.horas} h → ${fmtMoney(r.data.monto)}`,
+      aviso ? 'warning' : 'success'
+    );
     gpsCompleto = { lat: null, lng: null };
     document.getElementById('gpsCompletoInfo').textContent = '';
+    document.getElementById('formCompleto').reset();
+    document.getElementById('compFecha').value = todayStr();
+    document.getElementById('compTarifa').dataset.manual = '0';
+    document.getElementById('compCliente').value = '';
+    await cargarSelects();
     cargarResumen();
   } catch (err) {
     toast(err.message, 'danger');
@@ -339,7 +454,11 @@ document.getElementById('formCerrarTurno').addEventListener('submit', async (e) 
       })
     });
     modalCerrarTurno.hide();
-    toast(`Cerrado: ${r.data.horas} h — ${fmtMoney(r.data.monto)}`, 'success');
+    const aviso = r.data?.aviso;
+    toast(
+      aviso || `Cerrado: ${r.data.horas} h — ${fmtMoney(r.data.monto)}`,
+      aviso ? 'warning' : 'success'
+    );
     cargarResumen();
     if (!document.getElementById('tab-historial').classList.contains('d-none')) cargarHistorial();
   } catch (err) {
@@ -396,6 +515,8 @@ function claseUtilidad(n) {
   return 'text-muted';
 }
 
+let ultimoReporteRentabilidad = null;
+
 async function cargarReportes() {
   const desde = document.getElementById('repDesde').value || firstDayMonth();
   const hasta = document.getElementById('repHasta').value || todayStr();
@@ -403,6 +524,7 @@ async function cargarReportes() {
   document.getElementById('repHasta').value = hasta;
 
   const { data } = await api(`/reportes/rentabilidad?desde=${desde}&hasta=${hasta}`);
+  ultimoReporteRentabilidad = data;
   const t = data.totales || {};
 
   document.getElementById('repIngresos').textContent = fmtMoney(t.ingresos);
@@ -414,9 +536,10 @@ async function cargarReportes() {
   const filas = data.porMaquina || [];
   const tbody = document.getElementById('tablaRentabilidad');
   tbody.innerHTML = filas.map((m) => {
-    const gastosDet = [];
-    if (Number(m.gastos_combustible) > 0) gastosDet.push(`⛽ ${fmtMoney(m.gastos_combustible)}`);
-    if (Number(m.gastos_mantenimiento) > 0) gastosDet.push(`🔧 ${fmtMoney(m.gastos_mantenimiento)}`);
+    const porTipo = Array.isArray(m.gastos_por_tipo) ? m.gastos_por_tipo : [];
+    const gastosDet = porTipo
+      .filter((x) => Number(x.monto) > 0)
+      .map((x) => `${esc(x.nombre)} ${fmtMoney(x.monto)}`);
     return `
     <tr>
       <td>
@@ -444,6 +567,277 @@ async function cargarReportes() {
 }
 
 document.getElementById('btnFiltrarReportes').addEventListener('click', cargarReportes);
+
+function fmtMoneyPdf(n) {
+  return 'S/ ' + Number(n || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtFechaPdf(s) {
+  if (!s) return '-';
+  return String(s).replace('T', ' ').slice(0, 16);
+}
+
+function pdfNuevoDoc() {
+  if (!window.jspdf?.jsPDF) throw new Error('No se pudo cargar la librería PDF');
+  return new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+}
+
+function pdfCabecera(doc, titulo, desde, hasta) {
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text('MAQSIS', 14, 16);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(11);
+  doc.text(titulo, 14, 23);
+  doc.setFontSize(9);
+  doc.setTextColor(90);
+  doc.text(`Periodo: ${desde} al ${hasta}`, 14, 29);
+  doc.text(`Generado: ${fmtFechaPdf(new Date().toISOString())}`, 14, 34);
+  doc.setTextColor(0);
+  return 40;
+}
+
+function pdfPiePaginas(doc) {
+  const total = doc.getNumberOfPages();
+  for (let i = 1; i <= total; i += 1) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(120);
+    doc.text(`Página ${i} de ${total}`, 105, 287, { align: 'center' });
+    doc.setTextColor(0);
+  }
+}
+
+function pdfSeccionResumen(doc, data, startY) {
+  const t = data.totales || {};
+  let y = startY;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('Resumen general', 14, y);
+  y += 6;
+
+  doc.autoTable({
+    startY: y,
+    theme: 'grid',
+    styles: { fontSize: 9, cellPadding: 3 },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 45 },
+      1: { halign: 'right' }
+    },
+    body: [
+      ['Ingresos', fmtMoneyPdf(t.ingresos)],
+      ['Gastos', fmtMoneyPdf(t.gastos_total)],
+      ['Utilidad', fmtMoneyPdf(t.utilidad)]
+    ],
+    didParseCell(hook) {
+      if (hook.section === 'body' && hook.column.index === 1) {
+        if (hook.row.index === 0) hook.cell.styles.textColor = [25, 135, 84];
+        if (hook.row.index === 1) hook.cell.styles.textColor = [220, 53, 69];
+        if (hook.row.index === 2) {
+          const u = Number(t.utilidad || 0);
+          hook.cell.styles.textColor = u >= 0 ? [25, 135, 84] : [220, 53, 69];
+          hook.cell.styles.fontStyle = 'bold';
+        }
+      }
+    }
+  });
+
+  y = (doc.lastAutoTable?.finalY || y) + 10;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('Rentabilidad por máquina', 14, y);
+  y += 5;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(100);
+  doc.text('Utilidad = Ingresos - Gastos (combustible + mantenimiento)', 14, y);
+  doc.setTextColor(0);
+  y += 3;
+
+  const filas = data.porMaquina || [];
+  const body = filas.length
+    ? filas.map((m) => {
+      const porTipo = Array.isArray(m.gastos_por_tipo) ? m.gastos_por_tipo : [];
+      const det = porTipo
+        .filter((x) => Number(x.monto) > 0)
+        .map((x) => `${x.nombre}: ${fmtMoneyPdf(x.monto)}`);
+      const gastosTxt = det.length
+        ? `${fmtMoneyPdf(m.gastos_total)}\n${det.join(' | ')}`
+        : fmtMoneyPdf(m.gastos_total);
+      return [
+        `${m.nombre || ''}\n${m.codigo || ''}`,
+        Number(m.horas || 0).toFixed(2),
+        fmtMoneyPdf(m.ingresos),
+        gastosTxt,
+        fmtMoneyPdf(m.utilidad)
+      ];
+    })
+    : [['Sin datos en el periodo', '', '', '', '']];
+
+  if (filas.length) {
+    body.push([
+      'Total',
+      Number(t.horas || 0).toFixed(2),
+      fmtMoneyPdf(t.ingresos),
+      fmtMoneyPdf(t.gastos_total),
+      fmtMoneyPdf(t.utilidad)
+    ]);
+  }
+
+  doc.autoTable({
+    startY: y,
+    head: [['Máquina', 'Horas', 'Ingresos', 'Gastos', 'Utilidad']],
+    body,
+    theme: 'striped',
+    styles: { fontSize: 8, cellPadding: 2, valign: 'top' },
+    headStyles: { fillColor: [33, 37, 41], textColor: 255 },
+    columnStyles: {
+      1: { halign: 'right' },
+      2: { halign: 'right', textColor: [25, 135, 84] },
+      3: {halign: 'right', textColor: [220, 53, 69] },
+      4: {halign: 'right', fontStyle: 'bold' }
+    },
+    didParseCell(hook) {
+      if (hook.section !== 'body') return;
+      if (hook.row.index === body.length - 1 && filas.length) {
+        hook.cell.styles.fontStyle = 'bold';
+        hook.cell.styles.fillColor = [248, 249, 250];
+      }
+      if (hook.column.index === 4 && filas.length) {
+        const raw = filas[hook.row.index]?.utilidad ?? t.utilidad;
+        const u = Number(raw || 0);
+        hook.cell.styles.textColor = u >= 0 ? [25, 135, 84] : [220, 53, 69];
+      }
+    }
+  });
+
+  return doc.lastAutoTable?.finalY || y;
+}
+
+function pdfSeccionIngresos(doc, detalle, { newPage = false } = {}) {
+  if (newPage) doc.addPage();
+  const y = pdfCabecera(doc, 'Detalle de ingresos', detalle.desde, detalle.hasta);
+
+  const filas = detalle.ingresos || [];
+  const body = filas.length
+    ? filas.map((r) => [
+      fmtFechaPdf(r.hora_inicio),
+      `${r.maquinaria_nombre || ''}${r.maquinaria_codigo ? ` (${r.maquinaria_codigo})` : ''}`,
+      r.cliente_nombre || '-',
+      r.horas != null ? Number(r.horas).toFixed(2) : '-',
+      fmtMoneyPdf(r.monto)
+    ])
+    : [['Sin ingresos en el periodo', '', '', '', '']];
+
+  if (filas.length) {
+    body.push(['Total', '', '', '', fmtMoneyPdf(detalle.totales?.ingresos)]);
+  }
+
+  doc.autoTable({
+    startY: y,
+    head: [['Fecha inicio', 'Máquina', 'Cliente', 'Horas', 'Monto']],
+    body,
+    theme: 'striped',
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [25, 135, 84], textColor: 255 },
+    columnStyles: {
+      3: { halign: 'right' },
+      4: { halign: 'right', textColor: [25, 135, 84] }
+    },
+    didParseCell(hook) {
+      if (hook.section === 'body' && filas.length && hook.row.index === body.length - 1) {
+        hook.cell.styles.fontStyle = 'bold';
+        hook.cell.styles.fillColor = [232, 245, 233];
+      }
+    }
+  });
+}
+
+function pdfSeccionEgresos(doc, detalle, { newPage = false } = {}) {
+  if (newPage) doc.addPage();
+  const y = pdfCabecera(doc, 'Detalle de egresos', detalle.desde, detalle.hasta);
+
+  const filas = detalle.egresos || [];
+  const body = filas.length
+    ? filas.map((g) => [
+      String(g.fecha || '').slice(0, 10),
+      g.tipo_nombre || g.tipo || '-',
+      `${g.maquinaria_nombre || ''}${g.maquinaria_codigo ? ` (${g.maquinaria_codigo})` : ''}`,
+      g.proveedor || g.descripcion || '-',
+      fmtMoneyPdf(g.monto)
+    ])
+    : [['Sin egresos en el periodo', '', '', '', '']];
+
+  if (filas.length) {
+    body.push(['Total', '', '', '', fmtMoneyPdf(detalle.totales?.egresos)]);
+  }
+
+  doc.autoTable({
+    startY: y,
+    head: [['Fecha', 'Tipo', 'Máquina', 'Detalle', 'Monto']],
+    body,
+    theme: 'striped',
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [220, 53, 69], textColor: 255 },
+    columnStyles: {
+      4: {halign: 'right', textColor: [220, 53, 69] }
+    },
+    didParseCell(hook) {
+      if (hook.section === 'body' && filas.length && hook.row.index === body.length - 1) {
+        hook.cell.styles.fontStyle = 'bold';
+        hook.cell.styles.fillColor = [253, 236, 234];
+      }
+    }
+  });
+}
+
+async function exportarPdfReportes(modo) {
+  try {
+    const desde = document.getElementById('repDesde').value || firstDayMonth();
+    const hasta = document.getElementById('repHasta').value || todayStr();
+
+    let rent = ultimoReporteRentabilidad;
+    if (!rent || rent.desde !== desde || rent.hasta !== hasta) {
+      const { data } = await api(`/reportes/rentabilidad?desde=${desde}&hasta=${hasta}`);
+      rent = data;
+      ultimoReporteRentabilidad = data;
+    }
+
+    let detalle = null;
+    if (modo === 'completo' || modo === 'ingresos' || modo === 'egresos') {
+      const { data } = await api(`/reportes/detalle?desde=${desde}&hasta=${hasta}`);
+      detalle = data;
+    }
+
+    const doc = pdfNuevoDoc();
+    const nombreBase = `MAQSIS_${modo}_${desde}_${hasta}`;
+
+    if (modo === 'resumen') {
+      const y = pdfCabecera(doc, 'Resumen de rentabilidad', desde, hasta);
+      pdfSeccionResumen(doc, rent, y);
+    } else if (modo === 'ingresos') {
+      pdfSeccionIngresos(doc, detalle);
+    } else if (modo === 'egresos') {
+      pdfSeccionEgresos(doc, detalle);
+    } else {
+      const y = pdfCabecera(doc, 'Reporte completo', desde, hasta);
+      pdfSeccionResumen(doc, rent, y);
+      pdfSeccionIngresos(doc, detalle, { newPage: true });
+      pdfSeccionEgresos(doc, detalle, { newPage: true });
+    }
+
+    pdfPiePaginas(doc);
+    doc.save(`${nombreBase}.pdf`);
+    toast('PDF generado', 'success');
+  } catch (err) {
+    toast(err.message || 'No se pudo exportar el PDF', 'danger');
+  }
+}
+
+document.querySelectorAll('[data-pdf]').forEach((btn) => {
+  btn.addEventListener('click', () => exportarPdfReportes(btn.dataset.pdf));
+});
 
 function fmtHorometro(ini, fin) {
   const a = ini != null ? Number(ini).toFixed(1) : null;
@@ -654,19 +1048,140 @@ async function cargarMaquinaria() {
   });
 }
 
-// --- Gastos de maquinaria ---
-const GASTO_TIPOS = { COMBUSTIBLE: 'Combustible', MANTENIMIENTO: 'Mantenimiento' };
+// --- Tipos de gasto ---
+async function cargarTiposGasto(forzar = false) {
+  if (!forzar && tiposGastoCache.length) return tiposGastoCache;
+  const { data } = await api('/tipos-gasto');
+  tiposGastoCache = data || [];
+  return tiposGastoCache;
+}
 
+function opcionesTiposGasto(selected = '', { incluirVacio = false, vacioLabel = 'Todos' } = {}) {
+  const opts = [];
+  if (incluirVacio) opts.push(`<option value="">${esc(vacioLabel)}</option>`);
+  for (const t of tiposGastoCache) {
+    const sel = String(t.codigo) === String(selected) ? ' selected' : '';
+    opts.push(`<option value="${esc(t.codigo)}"${sel}>${esc(t.nombre)}</option>`);
+  }
+  return opts.join('');
+}
+
+async function refrescarSelectsTipoGasto(selected = '') {
+  await cargarTiposGasto(true);
+  const filtroSel = document.getElementById('gastoFiltroTipo').value;
+  document.getElementById('gastoFiltroTipo').innerHTML = opcionesTiposGasto(filtroSel, { incluirVacio: true });
+  document.getElementById('gastoTipo').innerHTML = opcionesTiposGasto(selected || (tiposGastoCache[0]?.codigo || ''));
+}
+
+function resetFormTipoGasto() {
+  document.getElementById('tipoGastoId').value = '';
+  document.getElementById('tipoGastoNombre').value = '';
+  document.getElementById('tipoGastoCodigo').value = '';
+  document.getElementById('tipoGastoPideGalones').checked = false;
+  document.getElementById('btnGuardarTipoGasto').textContent = 'Agregar tipo';
+  document.getElementById('btnCancelarTipoGasto').classList.add('d-none');
+}
+
+function editarTipoGastoForm(t) {
+  document.getElementById('tipoGastoId').value = t.id;
+  document.getElementById('tipoGastoNombre').value = t.nombre || '';
+  document.getElementById('tipoGastoCodigo').value = t.codigo || '';
+  document.getElementById('tipoGastoPideGalones').checked = !!Number(t.pide_galones);
+  document.getElementById('btnGuardarTipoGasto').textContent = 'Guardar cambios';
+  document.getElementById('btnCancelarTipoGasto').classList.remove('d-none');
+}
+
+async function renderListaTiposGasto() {
+  const { data } = await api('/tipos-gasto?todos=1');
+  const activos = (data || []).filter((t) => Number(t.activo) === 1);
+  const inactivos = (data || []).filter((t) => Number(t.activo) !== 1);
+  const items = [...activos, ...inactivos];
+
+  document.getElementById('listaTiposGasto').innerHTML = items.map((t) => {
+    const inactivo = Number(t.activo) !== 1;
+    return `
+    <li class="list-group-item d-flex justify-content-between align-items-start gap-2 ${inactivo ? 'opacity-50' : ''}">
+      <div>
+        <strong>${esc(t.nombre)}</strong>
+        <div class="small text-muted">${esc(t.codigo)}${Number(t.pide_galones) ? ' · pide galones' : ''}${inactivo ? ' · inactivo' : ''}</div>
+      </div>
+      ${inactivo ? '' : `<div class="d-flex gap-1 flex-shrink-0">
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-edit-tipo='${JSON.stringify(t).replace(/'/g, '&#39;')}'>Editar</button>
+        <button type="button" class="btn btn-sm btn-outline-danger" data-del-tipo="${t.id}">Baja</button>
+      </div>`}
+    </li>`;
+  }).join('') || '<li class="list-group-item text-muted">Sin tipos</li>';
+
+  document.querySelectorAll('[data-edit-tipo]').forEach((btn) => {
+    btn.addEventListener('click', () => editarTipoGastoForm(JSON.parse(btn.getAttribute('data-edit-tipo'))));
+  });
+  document.querySelectorAll('[data-del-tipo]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('¿Dar de baja este tipo de gasto?')) return;
+      try {
+        await api(`/tipos-gasto/${btn.dataset.delTipo}`, { method: 'DELETE' });
+        toast('Tipo dado de baja', 'success');
+        resetFormTipoGasto();
+        await renderListaTiposGasto();
+        await refrescarSelectsTipoGasto();
+      } catch (err) {
+        toast(err.message, 'danger');
+      }
+    });
+  });
+}
+
+async function abrirModalTiposGasto() {
+  resetFormTipoGasto();
+  await renderListaTiposGasto();
+  modalTiposGasto.show();
+}
+
+document.getElementById('btnTiposGasto').addEventListener('click', () => abrirModalTiposGasto());
+document.getElementById('btnCancelarTipoGasto').addEventListener('click', resetFormTipoGasto);
+
+document.getElementById('formTipoGasto').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const payload = {
+    nombre: document.getElementById('tipoGastoNombre').value,
+    codigo: document.getElementById('tipoGastoCodigo').value || null,
+    pide_galones: document.getElementById('tipoGastoPideGalones').checked
+  };
+  try {
+    const id = document.getElementById('tipoGastoId').value;
+    if (id) {
+      await api(`/tipos-gasto/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+      toast('Tipo actualizado', 'success');
+    } else {
+      await api('/tipos-gasto', { method: 'POST', body: JSON.stringify(payload) });
+      toast('Tipo creado', 'success');
+    }
+    resetFormTipoGasto();
+    await renderListaTiposGasto();
+    await refrescarSelectsTipoGasto();
+  } catch (err) {
+    toast(err.message, 'danger');
+  }
+});
+
+// --- Gastos de maquinaria ---
 function toggleGalonesGasto() {
-  const esCombustible = document.getElementById('gastoTipo').value === 'COMBUSTIBLE';
-  document.getElementById('bloqueGalones').classList.toggle('d-none', !esCombustible);
+  const codigo = document.getElementById('gastoTipo').value;
+  const tipo = tiposGastoCache.find((t) => t.codigo === codigo);
+  const pide = !!(tipo && Number(tipo.pide_galones));
+  document.getElementById('bloqueGalones').classList.toggle('d-none', !pide);
 }
 
 async function abrirModalGasto(g = null) {
-  await asegurarMaquinariaCache();
+  await Promise.all([asegurarMaquinariaCache(), cargarTiposGasto()]);
+  if (!tiposGastoCache.length) {
+    toast('Primero cree un tipo de gasto', 'warning');
+    return abrirModalTiposGasto();
+  }
   document.getElementById('formGasto').reset();
   document.getElementById('gastoId').value = '';
   document.getElementById('gastoMaquinaria').innerHTML = opcionesMaquinaria();
+  document.getElementById('gastoTipo').innerHTML = opcionesTiposGasto(g?.tipo || tiposGastoCache[0]?.codigo || '');
   document.getElementById('modalFormGastoTitulo').textContent = g ? 'Editar gasto' : 'Nuevo gasto';
 
   if (g) {
@@ -681,7 +1196,6 @@ async function abrirModalGasto(g = null) {
     document.getElementById('gastoDescripcion').value = g.descripcion || '';
   } else {
     document.getElementById('gastoFecha').value = todayStr();
-    document.getElementById('gastoTipo').value = 'COMBUSTIBLE';
   }
   toggleGalonesGasto();
   modalFormGasto.show();
@@ -719,6 +1233,7 @@ document.getElementById('formGasto').addEventListener('submit', async (e) => {
 });
 
 async function cargarGastos() {
+  await refrescarSelectsTipoGasto();
   const desde = document.getElementById('gastoDesde').value;
   const hasta = document.getElementById('gastoHasta').value;
   const tipo = document.getElementById('gastoFiltroTipo').value;
@@ -733,9 +1248,9 @@ async function cargarGastos() {
   document.getElementById('gastoTotal').textContent = fmtMoney(total);
 
   document.getElementById('listaGastos').innerHTML = (data || []).map((g) => {
-    const badge = g.tipo === 'COMBUSTIBLE'
-      ? '<span class="badge bg-info text-dark">Combustible</span>'
-      : '<span class="badge bg-secondary">Mantenimiento</span>';
+    const nombreTipo = g.tipo_nombre || g.tipo || 'Gasto';
+    const badgeClass = g.tipo === 'COMBUSTIBLE' ? 'bg-info text-dark' : 'bg-secondary';
+    const badge = `<span class="badge ${badgeClass}">${esc(nombreTipo)}</span>`;
     const extra = [
       g.horometro != null ? `Horóm. ${Number(g.horometro).toFixed(1)}` : '',
       g.galones != null ? `${Number(g.galones).toFixed(2)} gal` : '',

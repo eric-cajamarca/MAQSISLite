@@ -25,7 +25,7 @@ async function sendPasswordResetEmail(to, resetUrl, nombre) {
     throw new Error('El servidor de correo no está configurado (SMTP)');
   }
 
-  const from = process.env.MAIL_FROM || process.env.SMTP_USER;
+  const from = process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER;
   const nombreSafe = nombre || 'Usuario';
 
   await transporter.sendMail({

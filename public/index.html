@@ -157,15 +157,12 @@
                 <label class="form-label">Cliente</label>
                 <select class="form-select" id="compCliente"><option value="">— Sin cliente —</option></select>
               </div>
+              <div class="mb-2">
+                <label class="form-label">Fecha del trabajo</label>
+                <input type="date" class="form-control" id="compFecha">
+                <div class="form-text">Obligatoria si solo usas horómetro (sin hora inicio/fin).</div>
+              </div>
               <div class="row">
-                <div class="col-6 mb-2">
-                  <label class="form-label">Hora inicio</label>
-                  <input type="datetime-local" class="form-control" id="compInicio" required>
-                </div>
-                <div class="col-6 mb-2">
-                  <label class="form-label">Hora fin</label>
-                  <input type="datetime-local" class="form-control" id="compFin" required>
-                </div>
                 <div class="col-6 mb-2">
                   <label class="form-label">Horómetro inicio</label>
                   <input type="number" step="0.1" min="0" class="form-control" id="compHorometroIni">
@@ -174,7 +171,25 @@
                   <label class="form-label">Horómetro fin</label>
                   <input type="number" step="0.1" min="0" class="form-control" id="compHorometroFin">
                 </div>
+                <div class="col-6 mb-2">
+                  <label class="form-label">Hora inicio <span class="text-muted fw-normal">(opcional)</span></label>
+                  <input type="datetime-local" class="form-control" id="compInicio">
+                </div>
+                <div class="col-6 mb-2">
+                  <label class="form-label">Hora fin <span class="text-muted fw-normal">(opcional)</span></label>
+                  <input type="datetime-local" class="form-control" id="compFin">
+                </div>
+                <div class="col-6 mb-2">
+                  <label class="form-label">Tarifa (S/ h)</label>
+                  <input type="number" step="0.01" min="0" class="form-control" id="compTarifa">
+                </div>
+                <div class="col-6 mb-2">
+                  <label class="form-label">Monto cobrado</label>
+                  <input type="number" step="0.01" min="0" class="form-control" id="compMonto" placeholder="Auto">
+                  <div class="form-text">Déjalo vacío para calcular horas × tarifa.</div>
+                </div>
               </div>
+              <div class="small mb-2" id="compCalcInfo"></div>
               <div class="mb-2">
                 <label class="form-label">Ubicación</label>
                 <input type="text" class="form-control" id="compUbicacion">
@@ -216,7 +231,10 @@
 
       <!-- GASTOS -->
       <section id="tab-gastos" class="tab-pane d-none">
-        <button type="button" class="btn btn-primary w-100 mb-3" id="btnNuevoGasto" data-perm="gastos_crear">+ Nuevo gasto</button>
+        <div class="d-flex gap-2 mb-3">
+          <button type="button" class="btn btn-primary flex-grow-1" id="btnNuevoGasto" data-perm="gastos_crear">+ Nuevo gasto</button>
+          <button type="button" class="btn btn-outline-secondary" id="btnTiposGasto" data-perm="gastos_crear" title="Tipos de gasto">Tipos</button>
+        </div>
         <div class="row g-2 mb-3 align-items-end">
           <div class="col-6 col-sm-auto">
             <label class="form-label small mb-0">Desde</label>
@@ -230,8 +248,6 @@
             <label class="form-label small mb-0">Tipo</label>
             <select class="form-select form-select-sm" id="gastoFiltroTipo">
               <option value="">Todos</option>
-              <option value="COMBUSTIBLE">Combustible</option>
-              <option value="MANTENIMIENTO">Mantenimiento</option>
             </select>
           </div>
           <div class="col-4 col-sm-auto">
@@ -258,8 +274,23 @@
             <label class="form-label small mb-0">Hasta</label>
             <input type="date" class="form-control form-control-sm" id="repHasta">
           </div>
-          <div class="col-2 col-sm-auto">
-            <button class="btn btn-primary btn-sm w-100" id="btnFiltrarReportes">↻</button>
+          <div class="col-auto">
+            <button class="btn btn-primary btn-sm" id="btnFiltrarReportes" title="Actualizar">↻</button>
+          </div>
+          <div class="col-auto ms-sm-auto">
+            <div class="dropdown">
+              <button class="btn btn-outline-danger btn-sm dropdown-toggle" type="button"
+                data-bs-toggle="dropdown" aria-expanded="false" id="btnExportPdf">
+                Exportar PDF
+              </button>
+              <ul class="dropdown-menu dropdown-menu-end">
+                <li><button type="button" class="dropdown-item" data-pdf="completo">Completo (resumen + ingresos + egresos)</button></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><button type="button" class="dropdown-item" data-pdf="resumen">Solo resumen</button></li>
+                <li><button type="button" class="dropdown-item" data-pdf="ingresos">Solo ingresos</button></li>
+                <li><button type="button" class="dropdown-item" data-pdf="egresos">Solo egresos</button></li>
+              </ul>
+            </div>
           </div>
         </div>
 
@@ -291,7 +322,7 @@
         </div>
 
         <h6 class="fw-semibold">Rentabilidad por máquina</h6>
-        <p class="text-muted small mb-2">Utilidad = Ingresos − Gastos (combustible + mantenimiento)</p>
+        <p class="text-muted small mb-2">Utilidad = Ingresos − Gastos (por tipo)</p>
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
             <thead class="table-light">
@@ -435,6 +466,42 @@
     </div>
   </div>
 
+  <!-- Modal: tipos de gasto -->
+  <div class="modal fade" id="modalTiposGasto" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-sm-down">
+      <div class="modal-content">
+        <div class="modal-header py-2">
+          <h5 class="modal-title fs-6">Tipos de gasto</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="formTipoGasto" class="border rounded p-3 mb-3 bg-light">
+            <input type="hidden" id="tipoGastoId">
+            <div class="mb-2">
+              <label class="form-label">Nombre</label>
+              <input type="text" class="form-control" id="tipoGastoNombre" required maxlength="80"
+                placeholder="Ej. Peaje, Operador, Repuesto...">
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Código <span class="text-muted small">(opcional)</span></label>
+              <input type="text" class="form-control text-uppercase" id="tipoGastoCodigo" maxlength="40"
+                placeholder="Se genera del nombre">
+            </div>
+            <div class="form-check mb-3">
+              <input class="form-check-input" type="checkbox" id="tipoGastoPideGalones">
+              <label class="form-check-label" for="tipoGastoPideGalones">Solicitar galones al registrar</label>
+            </div>
+            <div class="d-flex gap-2">
+              <button type="submit" class="btn btn-primary flex-grow-1" id="btnGuardarTipoGasto">Agregar tipo</button>
+              <button type="button" class="btn btn-outline-secondary d-none" id="btnCancelarTipoGasto">Cancelar</button>
+            </div>
+          </form>
+          <ul class="list-group" id="listaTiposGasto"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal: formulario gasto -->
   <div class="modal fade" id="modalFormGasto" tabindex="-1">
     <div class="modal-dialog modal-fullscreen-sm-down">
@@ -448,10 +515,7 @@
             <input type="hidden" id="gastoId">
             <div class="mb-2">
               <label class="form-label">Tipo de gasto</label>
-              <select class="form-select" id="gastoTipo" required>
-                <option value="COMBUSTIBLE">Combustible</option>
-                <option value="MANTENIMIENTO">Mantenimiento</option>
-              </select>
+              <select class="form-select" id="gastoTipo" required></select>
             </div>
             <div class="mb-2">
               <label class="form-label">Maquinaria</label>
@@ -543,6 +607,8 @@
 
   <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

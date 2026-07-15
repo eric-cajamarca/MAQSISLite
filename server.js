@@ -60,16 +60,103 @@ function checkForgotRateLimit(key) {
   return true;
 }
 
-function calcHorasYMonto(horaInicio, horaFin, tarifaHora) {
-  const ini = new Date(horaInicio);
-  const fin = new Date(horaFin);
-  if (Number.isNaN(ini.getTime()) || Number.isNaN(fin.getTime()) || fin <= ini) {
-    throw new Error('La hora de fin debe ser posterior a la de inicio');
-  }
-  const horas = (fin - ini) / (1000 * 60 * 60);
+function roundHoras(h) {
+  return Math.round(Number(h) * 10000) / 10000;
+}
+
+function roundMonto(m) {
+  return Math.round(Number(m) * 100) / 100;
+}
+
+function parseOptionalNumber(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+/**
+ * Prioriza horómetro para horas/cobro. Reloj es contexto;
+ * si ambos existen y difieren, manda el horómetro y se genera aviso.
+ * montoManual permite cobro no lineal.
+ */
+function calcHorasYMonto({
+  horaInicio,
+  horaFin,
+  horometroInicio,
+  horometroFin,
+  tarifaHora,
+  montoManual
+} = {}) {
   const tarifa = Number(tarifaHora) || 0;
-  const monto = Math.round(horas * tarifa * 100) / 100;
-  return { horas: Math.round(horas * 10000) / 10000, monto, tarifa };
+  const horoIni = parseOptionalNumber(horometroInicio);
+  const horoFin = parseOptionalNumber(horometroFin);
+  if (horoIni != null && Number.isNaN(horoIni)) throw new Error('Horómetro de inicio inválido');
+  if (horoFin != null && Number.isNaN(horoFin)) throw new Error('Horómetro de fin inválido');
+  if (horoIni != null && horoIni < 0) throw new Error('Horómetro de inicio inválido');
+  if (horoFin != null && horoFin < 0) throw new Error('Horómetro de fin inválido');
+
+  const hasHoro = horoIni != null && horoFin != null;
+  if (hasHoro && horoFin < horoIni) {
+    throw new Error('El horómetro de fin no puede ser menor al de inicio');
+  }
+  if (hasHoro && horoFin === horoIni) {
+    throw new Error('El horómetro de fin debe ser mayor al de inicio');
+  }
+
+  let horasReloj = null;
+  const ini = horaInicio ? new Date(horaInicio) : null;
+  const fin = horaFin ? new Date(horaFin) : null;
+  const hasReloj = !!(ini && fin && !Number.isNaN(ini.getTime()) && !Number.isNaN(fin.getTime()));
+  if (hasReloj) {
+    if (fin <= ini) throw new Error('La hora de fin debe ser posterior a la de inicio');
+    horasReloj = (fin - ini) / (1000 * 60 * 60);
+  }
+
+  let horas;
+  let baseCalculo;
+  let aviso = null;
+
+  if (hasHoro) {
+    horas = horoFin - horoIni;
+    baseCalculo = 'horometro';
+    if (horasReloj != null) {
+      const diff = Math.abs(horas - horasReloj);
+      if (diff > 0.25) {
+        aviso = `Horómetro (${roundHoras(horas)} h) difiere del reloj (${roundHoras(horasReloj)} h); se usa el horómetro para el cobro`;
+      }
+    }
+  } else if (horasReloj != null) {
+    horas = horasReloj;
+    baseCalculo = 'reloj';
+  } else {
+    throw new Error('Indica horómetro inicio y fin, o hora inicio y fin');
+  }
+
+  horas = roundHoras(horas);
+  let monto;
+  const montoParsed = parseOptionalNumber(montoManual);
+  if (montoParsed != null) {
+    if (Number.isNaN(montoParsed) || montoParsed < 0) throw new Error('Monto inválido');
+    monto = roundMonto(montoParsed);
+  } else {
+    monto = roundMonto(horas * tarifa);
+  }
+
+  return {
+    horas,
+    monto,
+    tarifa,
+    baseCalculo,
+    aviso,
+    horasReloj: horasReloj != null ? roundHoras(horasReloj) : null
+  };
+}
+
+function addHoursToMysqlDatetime(mysqlDt, hours) {
+  const d = new Date(String(mysqlDt).replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return mysqlDt;
+  d.setTime(d.getTime() + hours * 3600 * 1000);
+  return toMysqlDatetime(d);
 }
 
 // --- Health (público) ---
@@ -454,61 +541,129 @@ app.post('/api/registros/iniciar', requirePermiso('registrar'), async (req, res)
   }
 });
 
-/** Cerrar trabajo (hora fin → calcula horas y monto) */
+/** Cerrar trabajo (prioriza horómetro si hay ambos extremos) */
 app.post('/api/registros/:id/cerrar', requirePermiso('registrar'), async (req, res) => {
   try {
-    const { hora_fin, horometro_fin } = req.body || {};
+    const { hora_fin, horometro_fin, tarifa_hora, monto } = req.body || {};
     const [[reg]] = await pool.query(
       `SELECT * FROM registros_trabajo WHERE id = ? AND estado = 'EN_CURSO'`,
       [req.params.id]
     );
     if (!reg) return res.status(404).json({ message: 'Registro no encontrado o ya cerrado' });
 
-    const horoFin = horometro_fin != null && horometro_fin !== '' ? Number(horometro_fin) : null;
-    if (horoFin != null && (!Number.isFinite(horoFin) || horoFin < 0)) {
-      return res.status(400).json({ message: 'Horómetro de fin inválido' });
-    }
-    if (horoFin != null && reg.horometro_inicio != null && horoFin < Number(reg.horometro_inicio)) {
-      return res.status(400).json({ message: 'El horómetro de fin no puede ser menor al de inicio' });
-    }
-
     const fin = toMysqlDatetime(hora_fin) || toMysqlDatetime(new Date());
-    const { horas, monto, tarifa } = calcHorasYMonto(reg.hora_inicio, fin, reg.tarifa_hora ?? 0);
+    const calc = calcHorasYMonto({
+      horaInicio: reg.hora_inicio,
+      horaFin: fin,
+      horometroInicio: reg.horometro_inicio,
+      horometroFin: horometro_fin,
+      tarifaHora: tarifa_hora != null && tarifa_hora !== '' ? tarifa_hora : (reg.tarifa_hora ?? 0),
+      montoManual: monto
+    });
 
     await pool.query(
       `UPDATE registros_trabajo
        SET hora_fin = ?, horometro_fin = ?, horas = ?, monto = ?, tarifa_hora = ?, estado = 'CERRADO'
        WHERE id = ?`,
-      [fin, horoFin, horas, monto, tarifa, req.params.id]
+      [
+        fin,
+        parseOptionalNumber(horometro_fin),
+        calc.horas,
+        calc.monto,
+        calc.tarifa,
+        req.params.id
+      ]
     );
-    res.json({ data: { horas, monto }, message: 'Turno cerrado' });
+    res.json({
+      data: {
+        horas: calc.horas,
+        monto: calc.monto,
+        base_calculo: calc.baseCalculo,
+        aviso: calc.aviso
+      },
+      message: calc.aviso || 'Turno cerrado'
+    });
   } catch (e) {
     res.status(400).json({ message: e.message });
   }
 });
 
-/** Registro manual completo (inicio + fin de una vez) */
+/** Registro manual completo (inicio + fin de una vez; admite solo horómetro + fecha) */
 app.post('/api/registros', requirePermiso('registrar'), async (req, res) => {
   try {
     const {
-      id_maquinaria, id_cliente, hora_inicio, hora_fin, horometro_inicio, horometro_fin,
-      ubicacion, latitud, longitud, observaciones, tarifa_hora
+      id_maquinaria, id_cliente, fecha, hora_inicio, hora_fin, horometro_inicio, horometro_fin,
+      ubicacion, latitud, longitud, observaciones, tarifa_hora, monto
     } = req.body || {};
-    if (!id_maquinaria || !hora_inicio || !hora_fin) {
-      return res.status(400).json({ message: 'Maquinaria, hora inicio y hora fin son obligatorios' });
+    if (!id_maquinaria) {
+      return res.status(400).json({ message: 'Maquinaria es obligatoria' });
     }
 
-    const horoIni = horometro_inicio != null && horometro_inicio !== '' ? Number(horometro_inicio) : null;
-    const horoFin = horometro_fin != null && horometro_fin !== '' ? Number(horometro_fin) : null;
-    if (horoIni != null && horoFin != null && horoFin < horoIni) {
-      return res.status(400).json({ message: 'El horómetro de fin no puede ser menor al de inicio' });
+    const horoIni = parseOptionalNumber(horometro_inicio);
+    const horoFin = parseOptionalNumber(horometro_fin);
+    if (horometro_inicio != null && horometro_inicio !== '' && Number.isNaN(horoIni)) {
+      return res.status(400).json({ message: 'Horómetro de inicio inválido' });
+    }
+    if (horometro_fin != null && horometro_fin !== '' && Number.isNaN(horoFin)) {
+      return res.status(400).json({ message: 'Horómetro de fin inválido' });
+    }
+
+    const hasHoro = horoIni != null && horoFin != null;
+    let ini = toMysqlDatetime(hora_inicio);
+    let fin = toMysqlDatetime(hora_fin);
+    const hasReloj = !!(ini && fin);
+    const fechaStr = fecha ? String(fecha).trim().slice(0, 10) : '';
+    if (fechaStr && !/^\d{4}-\d{2}-\d{2}$/.test(fechaStr)) {
+      return res.status(400).json({ message: 'Fecha inválida (use YYYY-MM-DD)' });
+    }
+
+    if (!hasHoro && !hasReloj) {
+      return res.status(400).json({
+        message: 'Indica horómetro inicio y fin, o hora inicio y fin'
+      });
+    }
+    if (!ini && !fin && !fechaStr) {
+      return res.status(400).json({
+        message: 'Indica al menos una fecha del trabajo (campo fecha o hora inicio/fin)'
+      });
     }
 
     const [[maq]] = await pool.query('SELECT tarifa_hora FROM maquinaria WHERE id = ?', [id_maquinaria]);
-    const tarifa = tarifa_hora != null ? Number(tarifa_hora) : Number(maq?.tarifa_hora || 0);
-    const ini = toMysqlDatetime(hora_inicio);
-    const fin = toMysqlDatetime(hora_fin);
-    const { horas, monto } = calcHorasYMonto(ini, fin, tarifa);
+    if (!maq) return res.status(404).json({ message: 'Maquinaria no encontrada' });
+
+    const tarifaBase = tarifa_hora != null && tarifa_hora !== ''
+      ? Number(tarifa_hora)
+      : Number(maq.tarifa_hora || 0);
+    if (!Number.isFinite(tarifaBase) || tarifaBase < 0) {
+      return res.status(400).json({ message: 'Tarifa inválida' });
+    }
+
+    // Reloj solo entra al cálculo si el usuario lo envió completo (evita avisos falsos)
+    const calc = calcHorasYMonto({
+      horaInicio: hasReloj ? ini : null,
+      horaFin: hasReloj ? fin : null,
+      horometroInicio: horoIni,
+      horometroFin: horoFin,
+      tarifaHora: tarifaBase,
+      montoManual: monto
+    });
+
+    // Contexto de fecha/hora para reportes cuando no hay reloj completo
+    if (!hasReloj) {
+      if (fechaStr) {
+        ini = toMysqlDatetime(`${fechaStr}T00:00:00`);
+        fin = addHoursToMysqlDatetime(ini, calc.horas);
+      } else if (ini) {
+        fin = addHoursToMysqlDatetime(ini, calc.horas);
+      } else if (fin) {
+        const finDate = new Date(String(fin).replace(' ', 'T'));
+        finDate.setTime(finDate.getTime() - calc.horas * 3600 * 1000);
+        ini = toMysqlDatetime(finDate);
+      }
+    }
+    if (!ini || !fin) {
+      return res.status(400).json({ message: 'No se pudo determinar fecha/hora del trabajo' });
+    }
 
     const [r] = await pool.query(
       `INSERT INTO registros_trabajo (
@@ -516,17 +671,184 @@ app.post('/api/registros', requirePermiso('registrar'), async (req, res) => {
         ubicacion, latitud, longitud, observaciones, estado
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CERRADO')`,
       [
-        id_maquinaria, id_cliente || null, ini, horoIni, fin, horoFin, horas, tarifa, monto,
+        id_maquinaria, id_cliente || null, ini, horoIni, fin, horoFin, calc.horas, calc.tarifa, calc.monto,
         ubicacion || null, latitud ?? null, longitud ?? null, observaciones || null
       ]
     );
-    res.status(201).json({ data: { id: r.insertId, horas, monto }, message: 'Registro guardado' });
+    res.status(201).json({
+      data: {
+        id: r.insertId,
+        horas: calc.horas,
+        monto: calc.monto,
+        base_calculo: calc.baseCalculo,
+        aviso: calc.aviso
+      },
+      message: calc.aviso || 'Registro guardado'
+    });
   } catch (e) {
     res.status(400).json({ message: e.message });
   }
 });
 
-// --- Gastos de maquinaria (combustible / mantenimiento) ---
+// --- Tipos de gasto (catálogo) ---
+function slugCodigoTipo(nombre) {
+  return String(nombre || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
+}
+
+function validarTipoGastoBody(body, { requireCodigo = false } = {}) {
+  const nombre = String(body?.nombre || '').trim();
+  if (!nombre || nombre.length < 2) throw new Error('El nombre del tipo es obligatorio');
+  if (nombre.length > 80) throw new Error('El nombre no puede superar 80 caracteres');
+
+  let codigo = String(body?.codigo || '').trim().toUpperCase();
+  if (!codigo) codigo = slugCodigoTipo(nombre);
+  codigo = codigo.replace(/[^A-Z0-9_]/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  if (!codigo) throw new Error('Código de tipo inválido');
+  if (requireCodigo && !codigo) throw new Error('Código obligatorio');
+
+  const pideGalones = body?.pide_galones === true || body?.pide_galones === 1 || body?.pide_galones === '1';
+  return { nombre, codigo, pide_galones: pideGalones ? 1 : 0 };
+}
+
+async function ensureTiposGastoSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tipos_gasto (
+      id            INT AUTO_INCREMENT PRIMARY KEY,
+      codigo        VARCHAR(40)  NOT NULL,
+      nombre        VARCHAR(80)  NOT NULL,
+      pide_galones  TINYINT(1)   NOT NULL DEFAULT 0,
+      activo        TINYINT(1)   NOT NULL DEFAULT 1,
+      creado_en     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_tipos_gasto_codigo (codigo)
+    ) ENGINE=InnoDB
+  `);
+  await pool.query(`
+    INSERT IGNORE INTO tipos_gasto (codigo, nombre, pide_galones) VALUES
+      ('COMBUSTIBLE', 'Combustible', 1),
+      ('MANTENIMIENTO', 'Mantenimiento', 0)
+  `);
+  try {
+    await pool.query('ALTER TABLE gastos MODIFY COLUMN tipo VARCHAR(40) NOT NULL');
+  } catch (e) {
+    // Si la columna ya es VARCHAR o la tabla no existe aún, continuar
+    if (!/Unknown table|doesn't exist/i.test(e.message || '')) {
+      console.error('ensureTiposGastoSchema ALTER:', e.message);
+    }
+  }
+}
+
+app.get('/api/tipos-gasto', requirePermiso('gastos'), async (req, res) => {
+  try {
+    const incluirInactivos = String(req.query.todos || '') === '1';
+    const [rows] = await pool.query(
+      `SELECT id, codigo, nombre, pide_galones, activo,
+        CONVERT(creado_en, CHAR) AS creado_en
+       FROM tipos_gasto
+       ${incluirInactivos ? '' : 'WHERE activo = 1'}
+       ORDER BY nombre ASC`
+    );
+    res.json({ data: rows });
+  } catch (e) {
+    console.error('GET tipos-gasto:', e.message);
+    res.status(500).json({ message: e.message });
+  }
+});
+
+app.post('/api/tipos-gasto', requirePermiso('gastos_crear'), async (req, res) => {
+  try {
+    const { nombre, codigo, pide_galones } = validarTipoGastoBody(req.body);
+    const [[dup]] = await pool.query(
+      'SELECT id, activo FROM tipos_gasto WHERE codigo = ? LIMIT 1',
+      [codigo]
+    );
+    if (dup) {
+      if (Number(dup.activo) === 1) {
+        return res.status(400).json({ message: `Ya existe el tipo con código ${codigo}` });
+      }
+      await pool.query(
+        'UPDATE tipos_gasto SET nombre = ?, pide_galones = ?, activo = 1 WHERE id = ?',
+        [nombre, pide_galones, dup.id]
+      );
+      return res.status(201).json({
+        data: { id: dup.id, codigo, nombre, pide_galones },
+        message: 'Tipo de gasto reactivado'
+      });
+    }
+
+    const [r] = await pool.query(
+      'INSERT INTO tipos_gasto (codigo, nombre, pide_galones) VALUES (?, ?, ?)',
+      [codigo, nombre, pide_galones]
+    );
+    res.status(201).json({ data: { id: r.insertId, codigo, nombre, pide_galones }, message: 'Tipo de gasto creado' });
+  } catch (e) {
+    console.error('POST tipos-gasto:', e.message);
+    res.status(400).json({ message: e.message });
+  }
+});
+
+app.put('/api/tipos-gasto/:id', requirePermiso('gastos_crear'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const [[row]] = await pool.query('SELECT * FROM tipos_gasto WHERE id = ?', [id]);
+    if (!row) return res.status(404).json({ message: 'Tipo de gasto no encontrado' });
+
+    const { nombre, codigo, pide_galones } = validarTipoGastoBody({
+      ...req.body,
+      codigo: req.body?.codigo != null && req.body.codigo !== '' ? req.body.codigo : row.codigo
+    });
+
+    const [[dup]] = await pool.query(
+      'SELECT id FROM tipos_gasto WHERE codigo = ? AND id <> ? LIMIT 1',
+      [codigo, id]
+    );
+    if (dup) return res.status(400).json({ message: `Ya existe el tipo con código ${codigo}` });
+
+    // Si cambia el código, actualizar gastos que lo usan
+    if (codigo !== row.codigo) {
+      await pool.query('UPDATE gastos SET tipo = ? WHERE tipo = ?', [codigo, row.codigo]);
+    }
+
+    await pool.query(
+      'UPDATE tipos_gasto SET codigo = ?, nombre = ?, pide_galones = ? WHERE id = ?',
+      [codigo, nombre, pide_galones, id]
+    );
+    res.json({ message: 'Tipo de gasto actualizado' });
+  } catch (e) {
+    console.error('PUT tipos-gasto:', e.message);
+    res.status(400).json({ message: e.message });
+  }
+});
+
+app.delete('/api/tipos-gasto/:id', requirePermiso('gastos_crear'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const [[row]] = await pool.query('SELECT * FROM tipos_gasto WHERE id = ?', [id]);
+    if (!row) return res.status(404).json({ message: 'Tipo de gasto no encontrado' });
+
+    const [[uso]] = await pool.query(
+      'SELECT COUNT(*) AS n FROM gastos WHERE tipo = ? AND activo = 1',
+      [row.codigo]
+    );
+    if (Number(uso?.n || 0) > 0) {
+      // Baja lógica: sigue válido en historial
+      await pool.query('UPDATE tipos_gasto SET activo = 0 WHERE id = ?', [id]);
+      return res.json({ message: 'Tipo dado de baja (tiene gastos asociados)' });
+    }
+    await pool.query('UPDATE tipos_gasto SET activo = 0 WHERE id = ?', [id]);
+    res.json({ message: 'Tipo de gasto eliminado' });
+  } catch (e) {
+    console.error('DELETE tipos-gasto:', e.message);
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// --- Gastos de maquinaria ---
 app.get('/api/gastos', requirePermiso('gastos'), async (req, res) => {
   try {
     const { desde, hasta, id_maquinaria, tipo } = req.query;
@@ -534,9 +856,12 @@ app.get('/api/gastos', requirePermiso('gastos'), async (req, res) => {
       SELECT g.id, g.id_maquinaria, g.tipo,
         CONVERT(g.fecha, CHAR) AS fecha,
         g.monto, g.horometro, g.galones, g.proveedor, g.descripcion,
-        m.nombre AS maquinaria_nombre, m.codigo AS maquinaria_codigo
+        m.nombre AS maquinaria_nombre, m.codigo AS maquinaria_codigo,
+        COALESCE(t.nombre, g.tipo) AS tipo_nombre,
+        COALESCE(t.pide_galones, 0) AS pide_galones
       FROM gastos g
       INNER JOIN maquinaria m ON m.id = g.id_maquinaria
+      LEFT JOIN tipos_gasto t ON t.codigo = g.tipo
       WHERE g.activo = 1
     `;
     const params = [];
@@ -553,11 +878,16 @@ app.get('/api/gastos', requirePermiso('gastos'), async (req, res) => {
   }
 });
 
-function validarGasto(body) {
-  const tipo = String(body?.tipo || '').toUpperCase();
-  if (tipo !== 'COMBUSTIBLE' && tipo !== 'MANTENIMIENTO') {
-    throw new Error('Tipo de gasto inválido (COMBUSTIBLE o MANTENIMIENTO)');
-  }
+async function validarGasto(body) {
+  const tipo = String(body?.tipo || '').trim().toUpperCase();
+  if (!tipo) throw new Error('Seleccione el tipo de gasto');
+
+  const [[tipoRow]] = await pool.query(
+    'SELECT codigo, pide_galones, activo FROM tipos_gasto WHERE codigo = ? LIMIT 1',
+    [tipo]
+  );
+  if (!tipoRow || !tipoRow.activo) throw new Error('Tipo de gasto inválido o inactivo');
+
   if (!body?.id_maquinaria) throw new Error('Seleccione la maquinaria');
   const monto = Number(body?.monto);
   if (!Number.isFinite(monto) || monto <= 0) throw new Error('El monto debe ser mayor a 0');
@@ -565,12 +895,18 @@ function validarGasto(body) {
   if (horometro != null && (!Number.isFinite(horometro) || horometro < 0)) throw new Error('Horómetro inválido');
   const galones = body?.galones != null && body?.galones !== '' ? Number(body.galones) : null;
   if (galones != null && (!Number.isFinite(galones) || galones < 0)) throw new Error('Galones inválido');
-  return { tipo, monto, horometro, galones };
+  return {
+    tipo,
+    monto,
+    horometro,
+    galones,
+    pide_galones: !!tipoRow.pide_galones
+  };
 }
 
 app.post('/api/gastos', requirePermiso('gastos_crear'), async (req, res) => {
   try {
-    const { tipo, monto, horometro, galones } = validarGasto(req.body);
+    const { tipo, monto, horometro, galones, pide_galones } = await validarGasto(req.body);
     const { id_maquinaria, fecha, proveedor, descripcion } = req.body || {};
 
     const [[maq]] = await pool.query('SELECT id FROM maquinaria WHERE id = ? AND activo = 1', [id_maquinaria]);
@@ -580,7 +916,7 @@ app.post('/api/gastos', requirePermiso('gastos_crear'), async (req, res) => {
     const [r] = await pool.query(
       `INSERT INTO gastos (id_maquinaria, tipo, fecha, monto, horometro, galones, proveedor, descripcion)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id_maquinaria, tipo, fechaVal, monto, horometro, tipo === 'COMBUSTIBLE' ? galones : null,
+      [id_maquinaria, tipo, fechaVal, monto, horometro, pide_galones ? galones : null,
        proveedor || null, descripcion || null]
     );
     res.status(201).json({ data: { id: r.insertId }, message: 'Gasto registrado' });
@@ -592,7 +928,7 @@ app.post('/api/gastos', requirePermiso('gastos_crear'), async (req, res) => {
 
 app.put('/api/gastos/:id', requirePermiso('gastos_crear'), async (req, res) => {
   try {
-    const { tipo, monto, horometro, galones } = validarGasto(req.body);
+    const { tipo, monto, horometro, galones, pide_galones } = await validarGasto(req.body);
     const { id_maquinaria, fecha, proveedor, descripcion } = req.body || {};
     const fechaVal = fecha && String(fecha).trim() ? String(fecha).slice(0, 10) : new Date().toISOString().slice(0, 10);
 
@@ -600,7 +936,7 @@ app.put('/api/gastos/:id', requirePermiso('gastos_crear'), async (req, res) => {
       `UPDATE gastos SET id_maquinaria = ?, tipo = ?, fecha = ?, monto = ?, horometro = ?,
         galones = ?, proveedor = ?, descripcion = ?
        WHERE id = ? AND activo = 1`,
-      [id_maquinaria, tipo, fechaVal, monto, horometro, tipo === 'COMBUSTIBLE' ? galones : null,
+      [id_maquinaria, tipo, fechaVal, monto, horometro, pide_galones ? galones : null,
        proveedor || null, descripcion || null, req.params.id]
     );
     res.json({ message: 'Gasto actualizado' });
@@ -846,8 +1182,6 @@ app.get('/api/reportes/rentabilidad', requirePermiso('reportes'), async (req, re
         COALESCE(ing.horas, 0) AS horas,
         COALESCE(ing.ingresos, 0) AS ingresos,
         COALESCE(gas.gastos_total, 0) AS gastos_total,
-        COALESCE(gas.gastos_combustible, 0) AS gastos_combustible,
-        COALESCE(gas.gastos_mantenimiento, 0) AS gastos_mantenimiento,
         COALESCE(ing.ingresos, 0) - COALESCE(gas.gastos_total, 0) AS utilidad
        FROM maquinaria m
        LEFT JOIN (
@@ -860,10 +1194,7 @@ app.get('/api/reportes/rentabilidad', requirePermiso('reportes'), async (req, re
          GROUP BY id_maquinaria
        ) ing ON ing.id_maquinaria = m.id
        LEFT JOIN (
-         SELECT id_maquinaria,
-           SUM(monto) AS gastos_total,
-           SUM(CASE WHEN tipo = 'COMBUSTIBLE' THEN monto ELSE 0 END) AS gastos_combustible,
-           SUM(CASE WHEN tipo = 'MANTENIMIENTO' THEN monto ELSE 0 END) AS gastos_mantenimiento
+         SELECT id_maquinaria, SUM(monto) AS gastos_total
          FROM gastos
          WHERE activo = 1 AND fecha >= ? AND fecha <= ?
          GROUP BY id_maquinaria
@@ -873,7 +1204,42 @@ app.get('/api/reportes/rentabilidad', requirePermiso('reportes'), async (req, re
       [desde, hasta, desde, hasta]
     );
 
-    const totales = filas.reduce((acc, r) => {
+    const [porTipo] = await pool.query(
+      `SELECT g.id_maquinaria, g.tipo,
+        COALESCE(t.nombre, g.tipo) AS tipo_nombre,
+        SUM(g.monto) AS monto
+       FROM gastos g
+       LEFT JOIN tipos_gasto t ON t.codigo = g.tipo
+       WHERE g.activo = 1 AND g.fecha >= ? AND g.fecha <= ?
+       GROUP BY g.id_maquinaria, g.tipo, t.nombre
+       ORDER BY monto DESC`,
+      [desde, hasta]
+    );
+
+    const tiposPorMaq = new Map();
+    for (const row of porTipo) {
+      const key = String(row.id_maquinaria);
+      if (!tiposPorMaq.has(key)) tiposPorMaq.set(key, []);
+      tiposPorMaq.get(key).push({
+        codigo: row.tipo,
+        nombre: row.tipo_nombre,
+        monto: Number(row.monto || 0)
+      });
+    }
+
+    const porMaquina = filas.map((r) => {
+      const gastosPorTipo = tiposPorMaq.get(String(r.id)) || [];
+      const gastoComb = gastosPorTipo.find((x) => x.codigo === 'COMBUSTIBLE')?.monto || 0;
+      const gastoMant = gastosPorTipo.find((x) => x.codigo === 'MANTENIMIENTO')?.monto || 0;
+      return {
+        ...r,
+        gastos_por_tipo: gastosPorTipo,
+        gastos_combustible: gastoComb,
+        gastos_mantenimiento: gastoMant
+      };
+    });
+
+    const totales = porMaquina.reduce((acc, r) => {
       acc.horas += Number(r.horas || 0);
       acc.ingresos += Number(r.ingresos || 0);
       acc.gastos_total += Number(r.gastos_total || 0);
@@ -888,7 +1254,7 @@ app.get('/api/reportes/rentabilidad', requirePermiso('reportes'), async (req, re
         desde,
         hasta,
         totales,
-        porMaquina: filas
+        porMaquina
       }
     });
   } catch (e) {
@@ -897,10 +1263,80 @@ app.get('/api/reportes/rentabilidad', requirePermiso('reportes'), async (req, re
   }
 });
 
+/** Detalle de ingresos y egresos del período (para PDF / reportes) */
+app.get('/api/reportes/detalle', requirePermiso('reportes'), async (req, res) => {
+  try {
+    const desde = req.query.desde || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
+    const hasta = req.query.hasta || new Date().toISOString().slice(0, 10);
+
+    const [ingresos] = await pool.query(
+      `SELECT r.id,
+        CONVERT(r.hora_inicio, CHAR) AS hora_inicio,
+        CONVERT(r.hora_fin, CHAR) AS hora_fin,
+        r.horas, r.tarifa_hora, r.monto,
+        r.horometro_inicio, r.horometro_fin, r.ubicacion,
+        m.nombre AS maquinaria_nombre, m.codigo AS maquinaria_codigo,
+        c.nombre AS cliente_nombre
+       FROM registros_trabajo r
+       INNER JOIN maquinaria m ON m.id = r.id_maquinaria
+       LEFT JOIN clientes c ON c.id = r.id_cliente
+       WHERE r.estado = 'CERRADO'
+         AND DATE(r.hora_inicio) >= ? AND DATE(r.hora_inicio) <= ?
+       ORDER BY r.hora_inicio ASC
+       LIMIT 1000`,
+      [desde, hasta]
+    );
+
+    const [egresos] = await pool.query(
+      `SELECT g.id,
+        CONVERT(g.fecha, CHAR) AS fecha,
+        g.tipo, g.monto, g.horometro, g.galones, g.proveedor, g.descripcion,
+        m.nombre AS maquinaria_nombre, m.codigo AS maquinaria_codigo,
+        COALESCE(t.nombre, g.tipo) AS tipo_nombre
+       FROM gastos g
+       INNER JOIN maquinaria m ON m.id = g.id_maquinaria
+       LEFT JOIN tipos_gasto t ON t.codigo = g.tipo
+       WHERE g.activo = 1 AND g.fecha >= ? AND g.fecha <= ?
+       ORDER BY g.fecha ASC, g.id ASC
+       LIMIT 1000`,
+      [desde, hasta]
+    );
+
+    const totalIngresos = ingresos.reduce((s, r) => s + Number(r.monto || 0), 0);
+    const totalEgresos = egresos.reduce((s, r) => s + Number(r.monto || 0), 0);
+
+    res.json({
+      data: {
+        desde,
+        hasta,
+        ingresos,
+        egresos,
+        totales: {
+          ingresos: Math.round(totalIngresos * 100) / 100,
+          egresos: Math.round(totalEgresos * 100) / 100,
+          utilidad: Math.round((totalIngresos - totalEgresos) * 100) / 100
+        }
+      }
+    });
+  } catch (e) {
+    console.error('reportes/detalle:', e.message);
+    res.status(500).json({ message: e.message });
+  }
+});
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.error(`MAQSIS Simple → http://localhost:${PORT}`);
-});
+async function boot() {
+  try {
+    await ensureTiposGastoSchema();
+  } catch (e) {
+    console.error('ensureTiposGastoSchema:', e.message);
+  }
+  app.listen(PORT, () => {
+    console.error(`MAQSIS Simple → http://localhost:${PORT}`);
+  });
+}
+
+boot();

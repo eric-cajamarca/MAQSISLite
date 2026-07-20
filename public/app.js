@@ -848,12 +848,95 @@ function fmtHorometro(ini, fin) {
   return '—';
 }
 
+let ultimoHistorial = [];
+let filtrosHistorial = {};
+
+async function asegurarSelectsHistorial() {
+  await Promise.all([asegurarMaquinariaCache(), (async () => {
+    if (clientesCache.length) return;
+    const { data } = await api('/clientes');
+    clientesCache = data || [];
+  })()]);
+
+  const selMaq = document.getElementById('histMaquinaria');
+  const prevMaq = selMaq.value;
+  selMaq.innerHTML = '<option value="">Todas</option>' + maquinariaCache.map((m) =>
+    `<option value="${m.id}">${esc(m.nombre)} (${esc(m.codigo || 's/c')})</option>`
+  ).join('');
+  if (prevMaq) selMaq.value = prevMaq;
+
+  const selCli = document.getElementById('histCliente');
+  const prevCli = selCli.value;
+  selCli.innerHTML = '<option value="">Todos</option>' + clientesCache.map((c) =>
+    `<option value="${c.id}">${esc(c.nombre)}</option>`
+  ).join('');
+  if (prevCli) selCli.value = prevCli;
+
+  if (!document.getElementById('histDesde').value) {
+    document.getElementById('histDesde').value = firstDayMonth();
+  }
+  if (!document.getElementById('histHasta').value) {
+    document.getElementById('histHasta').value = todayStr();
+  }
+}
+
+function leerFiltrosHistorial() {
+  return {
+    desde: document.getElementById('histDesde').value || '',
+    hasta: document.getElementById('histHasta').value || '',
+    id_maquinaria: document.getElementById('histMaquinaria').value || '',
+    id_cliente: document.getElementById('histCliente').value || '',
+    horometro_desde: document.getElementById('histHorometroDesde').value || '',
+    horometro_hasta: document.getElementById('histHorometroHasta').value || ''
+  };
+}
+
+function queryHistorial(filtros) {
+  const params = new URLSearchParams();
+  if (filtros.desde) params.set('desde', filtros.desde);
+  if (filtros.hasta) params.set('hasta', filtros.hasta);
+  if (filtros.id_maquinaria) params.set('id_maquinaria', filtros.id_maquinaria);
+  if (filtros.id_cliente) params.set('id_cliente', filtros.id_cliente);
+  if (filtros.horometro_desde) params.set('horometro_desde', filtros.horometro_desde);
+  if (filtros.horometro_hasta) params.set('horometro_hasta', filtros.horometro_hasta);
+  const q = params.toString();
+  return q ? `/registros?${q}` : '/registros';
+}
+
+function etiquetaFiltrosHistorial(f) {
+  const partes = [];
+  if (f.desde || f.hasta) partes.push(`Fechas: ${f.desde || '...'} a ${f.hasta || '...'}`);
+  if (f.id_maquinaria) {
+    const m = maquinariaCache.find((x) => String(x.id) === String(f.id_maquinaria));
+    partes.push(`Máquina: ${m ? m.nombre : f.id_maquinaria}`);
+  }
+  if (f.id_cliente) {
+    const c = clientesCache.find((x) => String(x.id) === String(f.id_cliente));
+    partes.push(`Cliente: ${c ? c.nombre : f.id_cliente}`);
+  }
+  if (f.horometro_desde || f.horometro_hasta) {
+    partes.push(`Horóm.: ${f.horometro_desde || '...'} – ${f.horometro_hasta || '...'}`);
+  }
+  return partes.join(' | ') || 'Sin filtros';
+}
+
 async function cargarHistorial() {
-  const { data } = await api('/registros');
+  await asegurarSelectsHistorial();
+  const filtros = leerFiltrosHistorial();
+  filtrosHistorial = filtros;
+  const { data } = await api(queryHistorial(filtros));
+  ultimoHistorial = data || [];
+
+  const totalHoras = ultimoHistorial.reduce((s, r) => s + Number(r.horas || 0), 0);
+  const totalMonto = ultimoHistorial.reduce((s, r) => s + Number(r.monto || 0), 0);
+  document.getElementById('histCantidad').textContent = String(ultimoHistorial.length);
+  document.getElementById('histTotalHoras').textContent = totalHoras.toFixed(2);
+  document.getElementById('histTotalMonto').textContent = fmtMoney(totalMonto);
+
   const tbody = document.getElementById('tablaHistorial');
-  tbody.innerHTML = (data || []).map((r) => `
+  tbody.innerHTML = ultimoHistorial.map((r) => `
     <tr>
-      <td>${esc(r.maquinaria_nombre)}</td>
+      <td>${esc(r.maquinaria_nombre)}<br><small class="text-muted">${esc(r.maquinaria_codigo || '')}</small></td>
       <td>${esc(r.cliente_nombre || '—')}</td>
       <td class="small">${fmtUbicacion(r.ubicacion, r.latitud, r.longitud)}</td>
       <td class="small">${fmtDt(r.hora_inicio)}</td>
@@ -863,12 +946,100 @@ async function cargarHistorial() {
       <td>${r.monto != null ? fmtMoney(r.monto) : '—'}</td>
       <td>${r.estado === 'EN_CURSO' && hasPermiso('registrar') ? `<button class="btn btn-sm btn-warning" data-cerrar="${r.id}" data-info="${esc(r.maquinaria_nombre)} · inicio ${fmtDt(r.hora_inicio)}">Cerrar</button>` : ''}</td>
     </tr>
-  `).join('') || '<tr><td colspan="9">Sin registros</td></tr>';
+  `).join('') || '<tr><td colspan="9" class="text-muted">Sin registros con estos filtros</td></tr>';
 
   tbody.querySelectorAll('[data-cerrar]').forEach((btn) => {
     btn.addEventListener('click', () => cerrarTurno(btn.dataset.cerrar, btn.dataset.info));
   });
 }
+
+document.getElementById('btnFiltrarHistorial').addEventListener('click', () => {
+  cargarHistorial().catch((err) => toast(err.message, 'danger'));
+});
+
+function exportarPdfHistorial() {
+  try {
+    const f = filtrosHistorial.desde || filtrosHistorial.hasta
+      ? filtrosHistorial
+      : leerFiltrosHistorial();
+    const filas = ultimoHistorial || [];
+    const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text('MAQSIS', 14, 14);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.text('Historial de trabajos', 14, 21);
+    doc.setFontSize(8);
+    doc.setTextColor(90);
+    doc.text(etiquetaFiltrosHistorial(f), 14, 27);
+    doc.text(`Generado: ${fmtFechaPdf(new Date().toISOString())}`, 14, 32);
+    doc.setTextColor(0);
+
+    const totalHoras = filas.reduce((s, r) => s + Number(r.horas || 0), 0);
+    const totalMonto = filas.reduce((s, r) => s + Number(r.monto || 0), 0);
+
+    const body = filas.length
+      ? filas.map((r) => [
+        `${r.maquinaria_nombre || ''}${r.maquinaria_codigo ? ` (${r.maquinaria_codigo})` : ''}`,
+        r.cliente_nombre || '-',
+        (r.ubicacion || '').trim() || '-',
+        fmtFechaPdf(r.hora_inicio),
+        r.estado === 'EN_CURSO' ? 'En curso' : fmtFechaPdf(r.hora_fin),
+        fmtHorometro(r.horometro_inicio, r.horometro_fin).replace('—', '-'),
+        r.horas != null ? Number(r.horas).toFixed(2) : '-',
+        r.monto != null ? fmtMoneyPdf(r.monto) : '-'
+      ])
+      : [['Sin registros', '', '', '', '', '', '', '']];
+
+    if (filas.length) {
+      body.push([
+        `Total (${filas.length})`,
+        '', '', '', '', '',
+        totalHoras.toFixed(2),
+        fmtMoneyPdf(totalMonto)
+      ]);
+    }
+
+    doc.autoTable({
+      startY: 36,
+      head: [['Máquina', 'Cliente', 'Ubicación', 'Inicio', 'Fin', 'Horóm.', 'Hrs', 'Monto']],
+      body,
+      theme: 'striped',
+      styles: { fontSize: 7, cellPadding: 1.5, overflow: 'linebreak' },
+      headStyles: { fillColor: [33, 37, 41], textColor: 255 },
+      columnStyles: {
+        6: {halign: 'right' },
+        7: {halign: 'right', textColor: [25, 135, 84] }
+      },
+      didParseCell(hook) {
+        if (hook.section === 'body' && filas.length && hook.row.index === body.length - 1) {
+          hook.cell.styles.fontStyle = 'bold';
+          hook.cell.styles.fillColor = [248, 249, 250];
+        }
+      }
+    });
+
+    const totalPages = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i += 1) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(120);
+      doc.text(`Página ${i} de ${totalPages}`, 148, 200, { align: 'center' });
+      doc.setTextColor(0);
+    }
+
+    const desde = f.desde || 'inicio';
+    const hasta = f.hasta || 'fin';
+    doc.save(`MAQSIS_historial_${desde}_${hasta}.pdf`);
+    toast('PDF del historial generado', 'success');
+  } catch (err) {
+    toast(err.message || 'No se pudo exportar el PDF', 'danger');
+  }
+}
+
+document.getElementById('btnPdfHistorial').addEventListener('click', exportarPdfHistorial);
 
 // --- Modal cliente (crear/editar) ---
 function abrirModalCliente(c = null) {

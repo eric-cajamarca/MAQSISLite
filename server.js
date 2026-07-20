@@ -472,7 +472,10 @@ app.delete('/api/maquinaria/:id', requirePermiso('maquinaria_crear'), async (req
 // --- Registros de trabajo ---
 app.get('/api/registros', async (req, res) => {
   try {
-    const { desde, hasta, id_maquinaria, estado } = req.query;
+    const {
+      desde, hasta, id_maquinaria, id_cliente, estado,
+      horometro_desde, horometro_hasta
+    } = req.query;
     let sql = `
       SELECT r.*,
         m.nombre AS maquinaria_nombre, m.codigo AS maquinaria_codigo,
@@ -486,7 +489,22 @@ app.get('/api/registros', async (req, res) => {
     if (desde) { sql += ' AND DATE(r.hora_inicio) >= ?'; params.push(desde); }
     if (hasta) { sql += ' AND DATE(r.hora_inicio) <= ?'; params.push(hasta); }
     if (id_maquinaria) { sql += ' AND r.id_maquinaria = ?'; params.push(id_maquinaria); }
+    if (id_cliente) { sql += ' AND r.id_cliente = ?'; params.push(id_cliente); }
     if (estado) { sql += ' AND r.estado = ?'; params.push(estado); }
+
+    const horoMin = horometro_desde != null && horometro_desde !== '' ? Number(horometro_desde) : null;
+    const horoMax = horometro_hasta != null && horometro_hasta !== '' ? Number(horometro_hasta) : null;
+    if (horoMin != null && Number.isFinite(horoMin)) {
+      // El tramo de horómetro del registro llega al menos hasta este valor
+      sql += ' AND COALESCE(r.horometro_fin, r.horometro_inicio) >= ?';
+      params.push(horoMin);
+    }
+    if (horoMax != null && Number.isFinite(horoMax)) {
+      // El tramo de horómetro del registro empieza en o antes de este valor
+      sql += ' AND COALESCE(r.horometro_inicio, r.horometro_fin) <= ?';
+      params.push(horoMax);
+    }
+
     sql += ' ORDER BY r.hora_inicio DESC LIMIT 500';
     const [rows] = await pool.query(sql, params);
     res.json({ data: rows });

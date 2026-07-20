@@ -204,6 +204,49 @@
 
       <!-- HISTORIAL -->
       <section id="tab-historial" class="tab-pane d-none">
+        <div class="row g-2 mb-3 align-items-end">
+          <div class="col-6 col-sm-auto">
+            <label class="form-label small mb-0">Desde</label>
+            <input type="date" class="form-control form-control-sm" id="histDesde">
+          </div>
+          <div class="col-6 col-sm-auto">
+            <label class="form-label small mb-0">Hasta</label>
+            <input type="date" class="form-control form-control-sm" id="histHasta">
+          </div>
+          <div class="col-12 col-sm-auto">
+            <label class="form-label small mb-0">Máquina</label>
+            <select class="form-select form-select-sm" id="histMaquinaria" style="min-width: 10rem;">
+              <option value="">Todas</option>
+            </select>
+          </div>
+          <div class="col-12 col-sm-auto">
+            <label class="form-label small mb-0">Cliente</label>
+            <select class="form-select form-select-sm" id="histCliente" style="min-width: 10rem;">
+              <option value="">Todos</option>
+            </select>
+          </div>
+          <div class="col-6 col-sm-auto">
+            <label class="form-label small mb-0">Horóm. desde</label>
+            <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="histHorometroDesde" placeholder="Ej. 7100" style="min-width: 6.5rem;">
+          </div>
+          <div class="col-6 col-sm-auto">
+            <label class="form-label small mb-0">Horóm. hasta</label>
+            <input type="number" step="0.1" min="0" class="form-control form-control-sm" id="histHorometroHasta" placeholder="Ej. 7200" style="min-width: 6.5rem;">
+          </div>
+          <div class="col-auto">
+            <button type="button" class="btn btn-primary btn-sm" id="btnFiltrarHistorial" title="Filtrar">↻</button>
+          </div>
+          <div class="col-auto ms-sm-auto">
+            <button type="button" class="btn btn-outline-danger btn-sm" id="btnPdfHistorial">Exportar PDF</button>
+          </div>
+        </div>
+        <div class="card border-0 shadow-sm mb-3">
+          <div class="card-body p-2 p-sm-3 d-flex flex-wrap gap-3 justify-content-between align-items-center">
+            <span class="text-muted small"><span id="histCantidad">0</span> registro(s)</span>
+            <span class="small">Horas: <strong id="histTotalHoras">0.00</strong></span>
+            <span class="small">Monto: <strong class="text-success" id="histTotalMonto">S/ 0.00</strong></span>
+          </div>
+        </div>
         <div class="table-responsive">
           <table class="table table-sm table-striped">
             <thead>

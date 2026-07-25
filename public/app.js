@@ -13,6 +13,7 @@ const modalFormUsuario = new bootstrap.Modal('#modalFormUsuario');
 const modalFormGasto = new bootstrap.Modal('#modalFormGasto');
 const modalTiposGasto = new bootstrap.Modal('#modalTiposGasto');
 const modalCerrarTurno = new bootstrap.Modal('#modalCerrarTurno');
+const modalEditarRegistro = new bootstrap.Modal('#modalEditarRegistro');
 
 let maquinariaCache = [];
 let tiposGastoCache = [];
@@ -114,6 +115,19 @@ function fmtUbicacion(ubicacion, lat, lng) {
 
 function nowLocalInput() {
   const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
+/** Convierte datetime MySQL / ISO a valor datetime-local */
+function toLocalInput(s) {
+  if (!s) return '';
+  const str = String(s).trim();
+  if (!str) return '';
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(str)) return str.slice(0, 16);
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(str)) return str.replace(' ', 'T').slice(0, 16);
+  const d = new Date(str);
+  if (Number.isNaN(d.getTime())) return '';
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
 }
@@ -461,6 +475,145 @@ document.getElementById('formCerrarTurno').addEventListener('submit', async (e) 
     );
     cargarResumen();
     if (!document.getElementById('tab-historial').classList.contains('d-none')) cargarHistorial();
+  } catch (err) {
+    toast(err.message, 'danger');
+  }
+});
+
+function previewEditRegCalculo() {
+  const horoIni = document.getElementById('editRegHoroIni').value;
+  const horoFin = document.getElementById('editRegHoroFin').value;
+  const horaIni = document.getElementById('editRegInicio').value;
+  const horaFin = document.getElementById('editRegFin').value;
+  const tarifa = Number(document.getElementById('editRegTarifa').value) || 0;
+  const montoManual = document.getElementById('editRegMonto').value;
+
+  const hasHoro = horoIni !== '' && horoFin !== '';
+  const hasReloj = !!(horaIni && horaFin);
+  if (!hasHoro && !hasReloj) return null;
+
+  let horas = null;
+  let base = null;
+  let aviso = null;
+  let horasReloj = null;
+
+  if (hasReloj) {
+    const ini = new Date(horaIni);
+    const fin = new Date(horaFin);
+    if (!Number.isNaN(ini.getTime()) && !Number.isNaN(fin.getTime()) && fin > ini) {
+      horasReloj = (fin - ini) / (1000 * 60 * 60);
+    }
+  }
+  if (hasHoro) {
+    const a = Number(horoIni);
+    const b = Number(horoFin);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return null;
+    horas = b - a;
+    base = 'horometro';
+    if (horasReloj != null && Math.abs(horas - horasReloj) > 0.25) {
+      aviso = `Horómetro (${horas.toFixed(2)} h) ≠ reloj (${horasReloj.toFixed(2)} h): manda horómetro`;
+    }
+  } else if (horasReloj != null) {
+    horas = horasReloj;
+    base = 'reloj';
+  } else {
+    return null;
+  }
+
+  const monto = montoManual !== ''
+    ? Number(montoManual)
+    : Math.round(horas * tarifa * 100) / 100;
+  if (!Number.isFinite(monto)) return null;
+  return { horas, monto, base, aviso };
+}
+
+function actualizarEditRegCalcInfo() {
+  const info = document.getElementById('editRegCalcInfo');
+  const p = previewEditRegCalculo();
+  if (!p) {
+    info.className = 'small text-muted mb-2';
+    info.textContent = 'Corrige el horómetro y deja el monto vacío para recalcular.';
+    return;
+  }
+  const baseTxt = p.base === 'horometro' ? 'horómetro' : 'reloj';
+  info.className = p.aviso ? 'small text-warning mb-2' : 'small text-success mb-2';
+  info.textContent = p.aviso
+    || `Vista previa: ${p.horas.toFixed(2)} h (${baseTxt}) → ${fmtMoney(p.monto)}`;
+}
+
+async function abrirEditarRegistro(reg) {
+  await asegurarSelectsHistorial();
+  document.getElementById('editRegId').value = reg.id;
+  document.getElementById('editRegInfo').textContent =
+    `${reg.maquinaria_nombre || 'Máquina'}${reg.maquinaria_codigo ? ` (${reg.maquinaria_codigo})` : ''}`
+    + (reg.estado === 'EN_CURSO' ? ' · En curso' : '');
+
+  const sel = document.getElementById('editRegCliente');
+  sel.innerHTML = '<option value="">Sin cliente</option>' + clientesCache.map((c) =>
+    `<option value="${c.id}">${esc(c.nombre)}</option>`
+  ).join('');
+  sel.value = reg.id_cliente != null ? String(reg.id_cliente) : '';
+
+  document.getElementById('editRegInicio').value = toLocalInput(reg.hora_inicio);
+  document.getElementById('editRegFin').value = toLocalInput(reg.hora_fin);
+  document.getElementById('editRegHoroIni').value = reg.horometro_inicio != null ? reg.horometro_inicio : '';
+  document.getElementById('editRegHoroFin').value = reg.horometro_fin != null ? reg.horometro_fin : '';
+  document.getElementById('editRegTarifa').value = reg.tarifa_hora != null ? reg.tarifa_hora : '';
+  // Vacío = el servidor recalcula al corregir horómetro
+  document.getElementById('editRegMonto').value = '';
+  document.getElementById('editRegUbicacion').value = reg.ubicacion || '';
+  document.getElementById('editRegObs').value = reg.observaciones || '';
+
+  const finEl = document.getElementById('editRegFin');
+  const horoFinEl = document.getElementById('editRegHoroFin');
+  const esEnCurso = reg.estado === 'EN_CURSO';
+  finEl.disabled = esEnCurso;
+  horoFinEl.disabled = esEnCurso;
+  if (esEnCurso) {
+    finEl.value = '';
+    horoFinEl.value = '';
+  }
+
+  actualizarEditRegCalcInfo();
+  modalEditarRegistro.show();
+}
+
+['editRegHoroIni', 'editRegHoroFin', 'editRegInicio', 'editRegFin', 'editRegTarifa', 'editRegMonto'].forEach((id) => {
+  document.getElementById(id).addEventListener('input', actualizarEditRegCalcInfo);
+});
+
+document.getElementById('formEditarRegistro').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = document.getElementById('editRegId').value;
+  try {
+    const r = await api(`/registros/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        id_cliente: document.getElementById('editRegCliente').value || null,
+        hora_inicio: document.getElementById('editRegInicio').value || null,
+        hora_fin: document.getElementById('editRegFin').disabled
+          ? undefined
+          : (document.getElementById('editRegFin').value || null),
+        horometro_inicio: document.getElementById('editRegHoroIni').value || null,
+        horometro_fin: document.getElementById('editRegHoroFin').disabled
+          ? undefined
+          : (document.getElementById('editRegHoroFin').value || null),
+        tarifa_hora: document.getElementById('editRegTarifa').value || null,
+        monto: document.getElementById('editRegMonto').value || null,
+        ubicacion: document.getElementById('editRegUbicacion').value,
+        observaciones: document.getElementById('editRegObs').value
+      })
+    });
+    modalEditarRegistro.hide();
+    const aviso = r.data?.aviso;
+    toast(
+      aviso || (r.data?.horas != null
+        ? `Actualizado: ${r.data.horas} h → ${fmtMoney(r.data.monto)}`
+        : (r.message || 'Registro actualizado')),
+      aviso ? 'warning' : 'success'
+    );
+    if (hasPermiso('inicio')) cargarResumen().catch(() => {});
+    await cargarHistorial();
   } catch (err) {
     toast(err.message, 'danger');
   }
@@ -934,7 +1087,15 @@ async function cargarHistorial() {
   document.getElementById('histTotalMonto').textContent = fmtMoney(totalMonto);
 
   const tbody = document.getElementById('tablaHistorial');
-  tbody.innerHTML = ultimoHistorial.map((r) => `
+  tbody.innerHTML = ultimoHistorial.map((r) => {
+    const acciones = [];
+    if (hasPermiso('registrar')) {
+      if (r.estado === 'EN_CURSO') {
+        acciones.push(`<button type="button" class="btn btn-sm btn-warning" data-cerrar="${r.id}" data-info="${esc(r.maquinaria_nombre)} · inicio ${fmtDt(r.hora_inicio)}">Cerrar</button>`);
+      }
+      acciones.push(`<button type="button" class="btn btn-sm btn-outline-primary" data-editar="${r.id}">Editar</button>`);
+    }
+    return `
     <tr>
       <td>${esc(r.maquinaria_nombre)}<br><small class="text-muted">${esc(r.maquinaria_codigo || '')}</small></td>
       <td>${esc(r.cliente_nombre || '—')}</td>
@@ -944,12 +1105,18 @@ async function cargarHistorial() {
       <td class="small">${fmtHorometro(r.horometro_inicio, r.horometro_fin)}</td>
       <td>${r.horas != null ? Number(r.horas).toFixed(2) : '—'}</td>
       <td>${r.monto != null ? fmtMoney(r.monto) : '—'}</td>
-      <td>${r.estado === 'EN_CURSO' && hasPermiso('registrar') ? `<button class="btn btn-sm btn-warning" data-cerrar="${r.id}" data-info="${esc(r.maquinaria_nombre)} · inicio ${fmtDt(r.hora_inicio)}">Cerrar</button>` : ''}</td>
-    </tr>
-  `).join('') || '<tr><td colspan="9" class="text-muted">Sin registros con estos filtros</td></tr>';
+      <td class="text-nowrap">${acciones.join(' ')}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="9" class="text-muted">Sin registros con estos filtros</td></tr>';
 
   tbody.querySelectorAll('[data-cerrar]').forEach((btn) => {
     btn.addEventListener('click', () => cerrarTurno(btn.dataset.cerrar, btn.dataset.info));
+  });
+  tbody.querySelectorAll('[data-editar]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const reg = ultimoHistorial.find((x) => String(x.id) === String(btn.dataset.editar));
+      if (reg) abrirEditarRegistro(reg);
+    });
   });
 }
 

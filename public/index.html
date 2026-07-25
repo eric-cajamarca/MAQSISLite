@@ -418,6 +418,70 @@
     </div>
   </div>
 
+  <!-- Modal: editar registro -->
+  <div class="modal fade" id="modalEditarRegistro" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-sm-down">
+      <div class="modal-content">
+        <div class="modal-header py-2">
+          <h5 class="modal-title fs-6">Editar registro</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="formEditarRegistro">
+            <input type="hidden" id="editRegId">
+            <div class="mb-2 small text-muted" id="editRegInfo"></div>
+            <div class="mb-2">
+              <label class="form-label">Cliente</label>
+              <select class="form-select" id="editRegCliente">
+                <option value="">Sin cliente</option>
+              </select>
+            </div>
+            <div class="row g-2 mb-2">
+              <div class="col-6">
+                <label class="form-label">Hora inicio</label>
+                <input type="datetime-local" class="form-control" id="editRegInicio">
+              </div>
+              <div class="col-6">
+                <label class="form-label">Hora fin</label>
+                <input type="datetime-local" class="form-control" id="editRegFin">
+              </div>
+            </div>
+            <div class="row g-2 mb-2">
+              <div class="col-6">
+                <label class="form-label">Horómetro inicio</label>
+                <input type="number" step="0.1" min="0" class="form-control" id="editRegHoroIni">
+              </div>
+              <div class="col-6">
+                <label class="form-label">Horómetro fin</label>
+                <input type="number" step="0.1" min="0" class="form-control" id="editRegHoroFin">
+              </div>
+            </div>
+            <div class="row g-2 mb-2">
+              <div class="col-6">
+                <label class="form-label">Tarifa / h</label>
+                <input type="number" step="0.01" min="0" class="form-control" id="editRegTarifa">
+              </div>
+              <div class="col-6">
+                <label class="form-label">Monto (opcional)</label>
+                <input type="number" step="0.01" min="0" class="form-control" id="editRegMonto" placeholder="Vacío = recalcular">
+              </div>
+            </div>
+            <div class="small text-muted mb-2" id="editRegCalcInfo">Corrige el horómetro y deja el monto vacío para recalcular.</div>
+            <div class="mb-2">
+              <label class="form-label">Ubicación</label>
+              <input type="text" class="form-control" id="editRegUbicacion">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Observaciones</label>
+              <input type="text" class="form-control" id="editRegObs">
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Guardar cambios</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal: elegir cliente -->
   <div class="modal fade" id="modalElegirCliente" tabindex="-1">
     <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-sm-down">

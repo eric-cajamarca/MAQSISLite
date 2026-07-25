@@ -708,6 +708,124 @@ app.post('/api/registros', requirePermiso('registrar'), async (req, res) => {
   }
 });
 
+/** Editar registro (corregir horómetro, horas, monto, cliente, etc.) */
+app.put('/api/registros/:id', requirePermiso('registrar'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ message: 'ID inválido' });
+    }
+
+    const [[reg]] = await pool.query('SELECT * FROM registros_trabajo WHERE id = ?', [id]);
+    if (!reg) return res.status(404).json({ message: 'Registro no encontrado' });
+
+    const {
+      id_cliente, hora_inicio, hora_fin, horometro_inicio, horometro_fin,
+      ubicacion, observaciones, tarifa_hora, monto
+    } = req.body || {};
+
+    const horoIni = horometro_inicio !== undefined
+      ? parseOptionalNumber(horometro_inicio)
+      : parseOptionalNumber(reg.horometro_inicio);
+    const horoFin = horometro_fin !== undefined
+      ? parseOptionalNumber(horometro_fin)
+      : parseOptionalNumber(reg.horometro_fin);
+    if (horometro_inicio !== undefined && horometro_inicio !== '' && Number.isNaN(horoIni)) {
+      return res.status(400).json({ message: 'Horómetro de inicio inválido' });
+    }
+    if (horometro_fin !== undefined && horometro_fin !== '' && Number.isNaN(horoFin)) {
+      return res.status(400).json({ message: 'Horómetro de fin inválido' });
+    }
+
+    const ini = hora_inicio !== undefined
+      ? (toMysqlDatetime(hora_inicio) || reg.hora_inicio)
+      : reg.hora_inicio;
+    const fin = hora_fin !== undefined
+      ? (hora_fin ? toMysqlDatetime(hora_fin) : null)
+      : reg.hora_fin;
+
+    const clienteId = id_cliente !== undefined
+      ? (id_cliente || null)
+      : reg.id_cliente;
+    const ubic = ubicacion !== undefined ? (ubicacion || null) : reg.ubicacion;
+    const obs = observaciones !== undefined ? (observaciones || null) : reg.observaciones;
+
+    const tarifaBase = tarifa_hora != null && tarifa_hora !== ''
+      ? Number(tarifa_hora)
+      : Number(reg.tarifa_hora || 0);
+    if (!Number.isFinite(tarifaBase) || tarifaBase < 0) {
+      return res.status(400).json({ message: 'Tarifa inválida' });
+    }
+
+    if (reg.estado === 'EN_CURSO') {
+      if (horoIni != null && horoIni < 0) {
+        return res.status(400).json({ message: 'Horómetro de inicio inválido' });
+      }
+      await pool.query(
+        `UPDATE registros_trabajo
+         SET id_cliente = ?, hora_inicio = ?, horometro_inicio = ?, tarifa_hora = ?,
+             ubicacion = ?, observaciones = ?
+         WHERE id = ? AND estado = 'EN_CURSO'`,
+        [clienteId, ini, horoIni, tarifaBase, ubic, obs, id]
+      );
+      return res.json({ message: 'Registro actualizado', data: { id, estado: 'EN_CURSO' } });
+    }
+
+    // CERRADO: recalcular horas/monto (prioriza horómetro)
+    const hasHoro = horoIni != null && horoFin != null;
+    const hasReloj = !!(ini && fin);
+    if (!hasHoro && !hasReloj) {
+      return res.status(400).json({
+        message: 'Indica horómetro inicio y fin, o hora inicio y fin'
+      });
+    }
+
+    const calc = calcHorasYMonto({
+      horaInicio: hasReloj ? ini : null,
+      horaFin: hasReloj ? fin : null,
+      horometroInicio: horoIni,
+      horometroFin: horoFin,
+      tarifaHora: tarifaBase,
+      montoManual: monto
+    });
+
+    let finGuardar = fin;
+    if (!finGuardar && hasHoro && ini) {
+      finGuardar = addHoursToMysqlDatetime(ini, calc.horas);
+    }
+    if (!finGuardar) {
+      return res.status(400).json({ message: 'Indica hora de fin o horómetro completo' });
+    }
+
+    await pool.query(
+      `UPDATE registros_trabajo
+       SET id_cliente = ?, hora_inicio = ?, hora_fin = ?,
+           horometro_inicio = ?, horometro_fin = ?,
+           horas = ?, tarifa_hora = ?, monto = ?,
+           ubicacion = ?, observaciones = ?
+       WHERE id = ? AND estado = 'CERRADO'`,
+      [
+        clienteId, ini, finGuardar, horoIni, horoFin,
+        calc.horas, calc.tarifa, calc.monto, ubic, obs, id
+      ]
+    );
+
+    res.json({
+      data: {
+        id,
+        horas: calc.horas,
+        monto: calc.monto,
+        base_calculo: calc.baseCalculo,
+        aviso: calc.aviso
+      },
+      message: calc.aviso || 'Registro actualizado'
+    });
+  } catch (e) {
+    console.error('PUT registros:', e.message);
+    res.status(400).json({ message: e.message });
+  }
+});
+
 // --- Tipos de gasto (catálogo) ---
 function slugCodigoTipo(nombre) {
   return String(nombre || '')

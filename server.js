@@ -1307,6 +1307,100 @@ app.get('/api/reportes/resumen', requirePermiso('inicio'), async (req, res) => {
   }
 });
 
+/** Calendario mensual: días con trabajo y gastos (combustible / mantenimiento / otros) */
+app.get('/api/reportes/calendario', requirePermiso('inicio'), async (req, res) => {
+  try {
+    const ahora = new Date();
+    let anio = Number(req.query.anio);
+    let mes = Number(req.query.mes); // 1-12
+    if (!Number.isFinite(anio) || anio < 2000 || anio > 2100) anio = ahora.getFullYear();
+    if (!Number.isFinite(mes) || mes < 1 || mes > 12) mes = ahora.getMonth() + 1;
+
+    const pad = (n) => String(n).padStart(2, '0');
+    const desde = `${anio}-${pad(mes)}-01`;
+    const ultimoDia = new Date(anio, mes, 0).getDate();
+    const hasta = `${anio}-${pad(mes)}-${pad(ultimoDia)}`;
+
+    const [trabajos] = await pool.query(
+      `SELECT DATE(r.hora_inicio) AS fecha,
+        COUNT(*) AS cantidad,
+        COALESCE(SUM(r.horas), 0) AS horas,
+        COALESCE(SUM(r.monto), 0) AS monto
+       FROM registros_trabajo r
+       WHERE r.estado = 'CERRADO'
+         AND DATE(r.hora_inicio) >= ? AND DATE(r.hora_inicio) <= ?
+       GROUP BY DATE(r.hora_inicio)
+       ORDER BY fecha`,
+      [desde, hasta]
+    );
+
+    const [gastos] = await pool.query(
+      `SELECT g.fecha,
+        g.tipo,
+        COALESCE(t.nombre, g.tipo) AS tipo_nombre,
+        COUNT(*) AS cantidad,
+        COALESCE(SUM(g.monto), 0) AS monto
+       FROM gastos g
+       LEFT JOIN tipos_gasto t ON t.codigo = g.tipo
+       WHERE g.activo = 1 AND g.fecha >= ? AND g.fecha <= ?
+       GROUP BY g.fecha, g.tipo, t.nombre
+       ORDER BY g.fecha, g.tipo`,
+      [desde, hasta]
+    );
+
+    const dias = {};
+    for (let d = 1; d <= ultimoDia; d += 1) {
+      dias[`${anio}-${pad(mes)}-${pad(d)}`] = {
+        trabajo: null,
+        combustible: null,
+        mantenimiento: null,
+        otros: []
+      };
+    }
+
+    for (const row of trabajos) {
+      const fecha = String(row.fecha).slice(0, 10);
+      if (!dias[fecha]) continue;
+      dias[fecha].trabajo = {
+        cantidad: Number(row.cantidad || 0),
+        horas: Number(row.horas || 0),
+        monto: Number(row.monto || 0)
+      };
+    }
+
+    for (const row of gastos) {
+      const fecha = String(row.fecha).slice(0, 10);
+      if (!dias[fecha]) continue;
+      const item = {
+        codigo: row.tipo,
+        nombre: row.tipo_nombre,
+        cantidad: Number(row.cantidad || 0),
+        monto: Number(row.monto || 0)
+      };
+      if (row.tipo === 'COMBUSTIBLE') {
+        dias[fecha].combustible = item;
+      } else if (row.tipo === 'MANTENIMIENTO') {
+        dias[fecha].mantenimiento = item;
+      } else {
+        dias[fecha].otros.push(item);
+      }
+    }
+
+    res.json({
+      data: {
+        anio,
+        mes,
+        desde,
+        hasta,
+        dias
+      }
+    });
+  } catch (e) {
+    console.error('reportes/calendario:', e.message);
+    res.status(500).json({ message: e.message });
+  }
+});
+
 /** Rentabilidad por máquina: ingresos − gastos en el período */
 app.get('/api/reportes/rentabilidad', requirePermiso('reportes'), async (req, res) => {
   try {

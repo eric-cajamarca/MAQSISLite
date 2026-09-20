@@ -77,6 +77,27 @@
           </div>
         </div>
 
+        <div class="card border-0 shadow-sm mb-4">
+          <div class="card-body p-2 p-sm-3">
+            <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="btnCalPrev" aria-label="Mes anterior">‹</button>
+              <h6 class="mb-0 fw-semibold text-center" id="calTitulo">—</h6>
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="btnCalNext" aria-label="Mes siguiente">›</button>
+            </div>
+            <div class="cal-weekdays mb-1">
+              <span>Lun</span><span>Mar</span><span>Mié</span><span>Jue</span><span>Vie</span><span>Sáb</span><span>Dom</span>
+            </div>
+            <div class="cal-grid" id="calGrid"></div>
+            <div class="cal-legend mt-3">
+              <span><i class="cal-dot cal-dot-trabajo"></i> Trabajo</span>
+              <span><i class="cal-dot cal-dot-combustible"></i> Combustible</span>
+              <span><i class="cal-dot cal-dot-mantenimiento"></i> Mantenimiento</span>
+              <span><i class="cal-dot cal-dot-otro"></i> Otro gasto</span>
+            </div>
+            <div class="cal-detalle mt-3 d-none" id="calDetalle"></div>
+          </div>
+        </div>
+
         <div class="row g-2 mb-3 align-items-end">
           <div class="col-5 col-sm-auto">
             <label class="form-label small mb-0">Desde</label>

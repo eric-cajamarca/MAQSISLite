@@ -641,25 +641,184 @@ async function cargarResumen() {
   const lista = document.getElementById('listaEnCurso');
   if (!(data.enCurso || []).length) {
     lista.innerHTML = '<div class="text-muted small py-2">No hay turnos en curso</div>';
-    return;
-  }
-  lista.innerHTML = data.enCurso.map((t) => `
-    <div class="list-group-item d-flex justify-content-between align-items-center gap-2 py-2">
-      <div class="small">
-        <strong>${esc(t.maquinaria)}</strong><br>
-        <span class="text-muted">${esc(t.cliente || 'Sin cliente')} · ${fmtDt(t.hora_inicio)}</span><br>
-        <span class="text-muted">${fmtUbicacion(t.ubicacion, t.latitud, t.longitud)}</span>
+  } else {
+    lista.innerHTML = data.enCurso.map((t) => `
+      <div class="list-group-item d-flex justify-content-between align-items-center gap-2 py-2">
+        <div class="small">
+          <strong>${esc(t.maquinaria)}</strong><br>
+          <span class="text-muted">${esc(t.cliente || 'Sin cliente')} · ${fmtDt(t.hora_inicio)}</span><br>
+          <span class="text-muted">${fmtUbicacion(t.ubicacion, t.latitud, t.longitud)}</span>
+        </div>
+        ${hasPermiso('registrar') ? `<button class="btn btn-sm btn-warning flex-shrink-0" data-cerrar="${t.id}" data-info="${esc(t.maquinaria)} · inicio ${fmtDt(t.hora_inicio)}">Cerrar</button>` : ''}
       </div>
-      ${hasPermiso('registrar') ? `<button class="btn btn-sm btn-warning flex-shrink-0" data-cerrar="${t.id}" data-info="${esc(t.maquinaria)} · inicio ${fmtDt(t.hora_inicio)}">Cerrar</button>` : ''}
-    </div>
-  `).join('');
+    `).join('');
 
-  lista.querySelectorAll('[data-cerrar]').forEach((btn) => {
-    btn.addEventListener('click', () => cerrarTurno(btn.dataset.cerrar, btn.dataset.info));
+    lista.querySelectorAll('[data-cerrar]').forEach((btn) => {
+      btn.addEventListener('click', () => cerrarTurno(btn.dataset.cerrar, btn.dataset.info));
+    });
+  }
+
+  await cargarCalendarioMes().catch((err) => {
+    console.error('calendario:', err);
   });
 }
 
 document.getElementById('btnFiltrar').addEventListener('click', cargarResumen);
+
+const MESES_ES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+];
+
+let calAnio = new Date().getFullYear();
+let calMes = new Date().getMonth() + 1; // 1-12
+let calData = null;
+let calDiaSeleccionado = null;
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function fechaKey(anio, mes, dia) {
+  return `${anio}-${pad2(mes)}-${pad2(dia)}`;
+}
+
+function diaTieneEventos(info) {
+  if (!info) return false;
+  return !!(info.trabajo || info.combustible || info.mantenimiento || (info.otros && info.otros.length));
+}
+
+function renderCalendario() {
+  const titulo = document.getElementById('calTitulo');
+  const grid = document.getElementById('calGrid');
+  if (!titulo || !grid) return;
+
+  titulo.textContent = `${MESES_ES[calMes - 1]} ${calAnio}`;
+  const diasMap = (calData && calData.dias) || {};
+  const primerDia = new Date(calAnio, calMes - 1, 1);
+  // Lunes = 0 ... Domingo = 6
+  let offset = primerDia.getDay() - 1;
+  if (offset < 0) offset = 6;
+  const totalDias = new Date(calAnio, calMes, 0).getDate();
+  const hoy = todayStr();
+
+  const celdas = [];
+  for (let i = 0; i < offset; i += 1) {
+    celdas.push('<div class="cal-day is-empty" aria-hidden="true"></div>');
+  }
+
+  for (let d = 1; d <= totalDias; d += 1) {
+    const key = fechaKey(calAnio, calMes, d);
+    const info = diasMap[key] || {};
+    const clases = ['cal-day'];
+    if (info.trabajo) clases.push('has-trabajo');
+    if (info.combustible) clases.push('has-combustible');
+    if (info.mantenimiento) clases.push('has-mantenimiento');
+    if (info.otros && info.otros.length) clases.push('has-otro');
+    if (diaTieneEventos(info)) clases.push('has-event');
+    if (key === hoy) clases.push('is-today');
+    if (key === calDiaSeleccionado) clases.push('is-selected');
+
+    const marks = [];
+    if (info.trabajo) marks.push('<i class="cal-dot cal-dot-trabajo" title="Trabajo"></i>');
+    if (info.combustible) marks.push('<i class="cal-dot cal-dot-combustible" title="Combustible"></i>');
+    if (info.mantenimiento) marks.push('<i class="cal-dot cal-dot-mantenimiento" title="Mantenimiento"></i>');
+    if (info.otros && info.otros.length) marks.push('<i class="cal-dot cal-dot-otro" title="Otro gasto"></i>');
+
+    celdas.push(`
+      <button type="button" class="${clases.join(' ')}" data-cal-dia="${key}" ${diaTieneEventos(info) ? '' : 'disabled'}>
+        <span class="cal-day-num">${d}</span>
+        <span class="cal-marks">${marks.join('')}</span>
+      </button>
+    `);
+  }
+
+  grid.innerHTML = celdas.join('');
+  grid.querySelectorAll('[data-cal-dia]').forEach((btn) => {
+    btn.addEventListener('click', () => mostrarDetalleCalendario(btn.dataset.calDia));
+  });
+}
+
+function mostrarDetalleCalendario(fecha) {
+  const panel = document.getElementById('calDetalle');
+  if (!panel || !calData) return;
+  calDiaSeleccionado = fecha;
+  renderCalendario();
+
+  const info = (calData.dias && calData.dias[fecha]) || {};
+  if (!diaTieneEventos(info)) {
+    panel.classList.add('d-none');
+    panel.innerHTML = '';
+    return;
+  }
+
+  const partes = [];
+  partes.push(`<div class="fw-semibold mb-2">${esc(fecha)}</div>`);
+  if (info.trabajo) {
+    partes.push(`
+      <div class="mb-1">
+        <span class="cal-dot cal-dot-trabajo"></span>
+        <strong>Trabajo:</strong> ${info.trabajo.cantidad} registro(s) ·
+        ${Number(info.trabajo.horas).toFixed(2)} h · ${fmtMoney(info.trabajo.monto)}
+      </div>`);
+  }
+  if (info.combustible) {
+    partes.push(`
+      <div class="mb-1">
+        <span class="cal-dot cal-dot-combustible"></span>
+        <strong>Combustible:</strong> ${info.combustible.cantidad} · ${fmtMoney(info.combustible.monto)}
+      </div>`);
+  }
+  if (info.mantenimiento) {
+    partes.push(`
+      <div class="mb-1">
+        <span class="cal-dot cal-dot-mantenimiento"></span>
+        <strong>Mantenimiento:</strong> ${info.mantenimiento.cantidad} · ${fmtMoney(info.mantenimiento.monto)}
+      </div>`);
+  }
+  (info.otros || []).forEach((o) => {
+    partes.push(`
+      <div class="mb-1">
+        <span class="cal-dot cal-dot-otro"></span>
+        <strong>${esc(o.nombre)}:</strong> ${o.cantidad} · ${fmtMoney(o.monto)}
+      </div>`);
+  });
+
+  panel.innerHTML = partes.join('');
+  panel.classList.remove('d-none');
+}
+
+async function cargarCalendarioMes() {
+  const { data } = await api(`/reportes/calendario?anio=${calAnio}&mes=${calMes}`);
+  calData = data;
+  if (calDiaSeleccionado) {
+    const [y, m] = calDiaSeleccionado.split('-').map(Number);
+    if (y !== calAnio || m !== calMes) {
+      calDiaSeleccionado = null;
+      const panel = document.getElementById('calDetalle');
+      if (panel) {
+        panel.classList.add('d-none');
+        panel.innerHTML = '';
+      }
+    }
+  }
+  renderCalendario();
+}
+
+function cambiarMesCalendario(delta) {
+  calMes += delta;
+  if (calMes < 1) {
+    calMes = 12;
+    calAnio -= 1;
+  } else if (calMes > 12) {
+    calMes = 1;
+    calAnio += 1;
+  }
+  cargarCalendarioMes().catch((err) => toast(err.message, 'danger'));
+}
+
+document.getElementById('btnCalPrev').addEventListener('click', () => cambiarMesCalendario(-1));
+document.getElementById('btnCalNext').addEventListener('click', () => cambiarMesCalendario(1));
 
 function claseUtilidad(n) {
   const v = Number(n || 0);

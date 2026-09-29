@@ -154,8 +154,8 @@ document.querySelectorAll('#mainNav .nav-link').forEach((btn) => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.remove('d-none');
     cerrarSidebarMovil();
-    if (btn.dataset.tab === 'inicio') cargarResumen();
-    if (btn.dataset.tab === 'historial') cargarHistorial();
+    if (btn.dataset.tab === 'inicio') cargarResumen().catch((err) => toast(err.message, 'danger'));
+    if (btn.dataset.tab === 'historial') cargarHistorial().catch((err) => toast(err.message, 'danger'));
     if (btn.dataset.tab === 'clientes') cargarClientes();
     if (btn.dataset.tab === 'maquinaria') cargarMaquinaria();
     if (btn.dataset.tab === 'registrar') cargarSelects();
@@ -474,7 +474,9 @@ document.getElementById('formCerrarTurno').addEventListener('submit', async (e) 
       aviso ? 'warning' : 'success'
     );
     cargarResumen();
-    if (!document.getElementById('tab-historial').classList.contains('d-none')) cargarHistorial();
+    if (!document.getElementById('tab-historial').classList.contains('d-none')) {
+      cargarHistorial().catch((err) => toast(err.message, 'danger'));
+    }
   } catch (err) {
     toast(err.message, 'danger');
   }
@@ -1164,6 +1166,33 @@ function roundHoras2(n) {
   return Math.round(Number(n) * 100) / 100;
 }
 
+/**
+ * Convierte horas decimales del horómetro a hora reloj (minutos en los decimales).
+ * 0.60 h decimal = 36 min → 0.36
+ * 2.40 h decimal = 2 h 24 min → 2.24
+ */
+function horasDecimalAReloj(horasDecimal) {
+  const n = Number(horasDecimal);
+  if (!Number.isFinite(n)) {
+    return { texto: '0.00', valor: 0, minutosTotales: 0 };
+  }
+  const sign = n < 0 ? -1 : 1;
+  const abs = Math.abs(n);
+  let horas = Math.floor(abs);
+  let minutos = Math.round((abs - horas) * 60);
+  if (minutos >= 60) {
+    horas += 1;
+    minutos = 0;
+  }
+  const valor = sign * (horas + minutos / 100);
+  const texto = `${sign < 0 ? '-' : ''}${horas}.${String(minutos).padStart(2, '0')}`;
+  return { texto, valor, minutosTotales: sign * (horas * 60 + minutos) };
+}
+
+function fmtHorasReloj(horasDecimal) {
+  return horasDecimalAReloj(horasDecimal).texto;
+}
+
 function fechaClaveHistorial(s) {
   if (!s) return '';
   return String(s).replace('T', ' ').slice(0, 10);
@@ -1253,10 +1282,11 @@ function totalHuecosPositivos(huecos) {
 function textoHuecoHistorial(h) {
   const desde = Number(h.horoFinAnt).toFixed(1);
   const hasta = Number(h.horoIniAct).toFixed(1);
+  const reloj = fmtHorasReloj(Math.abs(h.horas));
   if (h.horas < 0) {
-    return `Horómetro inconsistente: ${Math.abs(h.horas).toFixed(2)} h de solape (${desde} → ${hasta})`;
+    return `Horómetro inconsistente: ${reloj} h de solape (${desde} → ${hasta})`;
   }
-  return `${h.horas.toFixed(2)} h de motor no registradas entre este trabajo y el anterior (${desde} → ${hasta})`;
+  return `${reloj} h de motor no registradas entre este trabajo y el anterior (${desde} → ${hasta})`;
 }
 
 function htmlFilaHuecoHistorial(h) {
@@ -1402,7 +1432,8 @@ async function cargarHistorial() {
   const totalesDia = mapaTotalesDia(ultimoHistorial);
   document.getElementById('histCantidad').textContent = String(ultimoHistorial.length);
   document.getElementById('histTotalHoras').textContent = totalHoras.toFixed(2);
-  document.getElementById('histTotalHuecos').textContent = totalHuecosPositivos(huecos).toFixed(2);
+  const elHuecos = document.getElementById('histTotalHuecos');
+  if (elHuecos) elHuecos.textContent = fmtHorasReloj(totalHuecosPositivos(huecos));
   document.getElementById('histTotalMonto').textContent = fmtMoney(totalMonto);
 
   const tbody = document.getElementById('tablaHistorial');
@@ -1522,7 +1553,7 @@ function exportarPdfHistorial() {
         fmtMoneyPdf(totalMonto)
       ]);
       body.push(filaExtraPdf(
-        `Huecos de horometro (motor no registrado): ${totalHuecos.toFixed(2)} h`,
+        `Huecos de horometro (motor no registrado): ${fmtHorasReloj(totalHuecos)} h`,
         [255, 248, 225],
         [180, 83, 9]
       ));

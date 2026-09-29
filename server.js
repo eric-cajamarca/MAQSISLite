@@ -559,19 +559,18 @@ app.get('/api/registros', async (req, res) => {
     sql += ' ORDER BY r.hora_inicio DESC LIMIT 500';
     const [rows] = await pool.query(sql, params);
 
-    const idsMaq = [...new Set(rows.map((r) => r.id_maquinaria).filter((id) => id != null))];
-    if (idsMaq.length) {
-      const [historialMaq] = await pool.query(
-        `SELECT id, id_maquinaria, horometro_inicio, horometro_fin, hora_inicio
-         FROM registros_trabajo
-         WHERE id_maquinaria IN (?)`,
-        [idsMaq]
-      );
-      adjuntarHuecosHorometro(rows, historialMaq);
+    // Huecos solo con las filas ya filtradas. No usar IN (?) con array:
+    // en mysql2 + Aiven suele lanzar "Incorrect arguments to mysqld_stmt_execute"
+    // y el filtro del historial responde 500.
+    try {
+      adjuntarHuecosHorometro(rows, rows);
+    } catch (huecoErr) {
+      console.error('GET registros huecos:', huecoErr.message);
     }
 
     res.json({ data: rows });
   } catch (e) {
+    console.error('GET registros:', e.message);
     res.status(500).json({ message: e.message });
   }
 });

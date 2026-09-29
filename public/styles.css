@@ -135,22 +135,35 @@ body { background: #f0f2f5; }
   .cal-day-num { font-size: 0.9rem; }
 }
 
-/* Historial: horas sin trabajar debajo de cada registro */
-#tablaHistorial tr.hist-fila-idle td {
-  background: #fff8e1 !important;
+/* Historial: hueco de horómetro entre trabajos y total del día */
+#tablaHistorial tr.hist-fila-hueco td,
+#tablaHistorial tr.hist-fila-dia td {
   border-top: 0;
   padding-top: 0.15rem;
   padding-bottom: 0.4rem;
 }
-.hist-idle-label {
+#tablaHistorial tr.hist-fila-hueco td {
+  background: #fff8e1 !important;
+}
+#tablaHistorial tr.hist-fila-hueco.es-alerta td {
+  background: #fde8e8 !important;
+}
+#tablaHistorial tr.hist-fila-dia td {
+  background: #eef6ff !important;
+}
+.hist-extra-label {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
   font-size: 0.8rem;
   font-weight: 600;
-  color: #b45309;
 }
-.hist-idle-label::before {
-  content: "⏸";
-  font-size: 0.75rem;
+.hist-fila-hueco .hist-extra-label { color: #b45309; }
+.hist-fila-hueco.es-alerta .hist-extra-label { color: #b42318; }
+.hist-fila-dia .hist-extra-label { color: #175cd3; }
+.hist-hrs-dia {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #175cd3;
 }

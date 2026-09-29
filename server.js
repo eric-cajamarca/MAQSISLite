@@ -74,6 +74,57 @@ function parseOptionalNumber(v) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+function roundHoras2(n) {
+  return Math.round(Number(n) * 100) / 100;
+}
+
+function ordenarPorHorometro(a, b) {
+  const ha = Number(a.horometro_inicio);
+  const hb = Number(b.horometro_inicio);
+  if (Number.isFinite(ha) && Number.isFinite(hb) && ha !== hb) return ha - hb;
+  const ta = new Date(String(a.hora_inicio || '').replace(' ', 'T')).getTime() || 0;
+  const tb = new Date(String(b.hora_inicio || '').replace(' ', 'T')).getTime() || 0;
+  if (ta !== tb) return ta - tb;
+  return Number(a.id) - Number(b.id);
+}
+
+/** Hueco de horómetro respecto al trabajo anterior de la misma máquina (aunque no esté en el filtro). */
+function mapaHuecosDesdeHistorial(historial) {
+  const porMaq = new Map();
+  for (const r of historial) {
+    if (r.id_maquinaria == null) continue;
+    const id = String(r.id_maquinaria);
+    if (!porMaq.has(id)) porMaq.set(id, []);
+    porMaq.get(id).push(r);
+  }
+  const huecos = new Map();
+  porMaq.forEach((arr) => {
+    arr.sort(ordenarPorHorometro);
+    for (let i = 1; i < arr.length; i += 1) {
+      const prev = arr[i - 1];
+      const cur = arr[i];
+      const fin = prev.horometro_fin != null && prev.horometro_fin !== '' ? Number(prev.horometro_fin) : NaN;
+      const ini = cur.horometro_inicio != null && cur.horometro_inicio !== '' ? Number(cur.horometro_inicio) : NaN;
+      if (!Number.isFinite(fin) || !Number.isFinite(ini)) continue;
+      const horas = roundHoras2(ini - fin);
+      if (Math.abs(horas) < 0.05) continue;
+      huecos.set(String(cur.id), { horas, desde: fin, hasta: ini });
+    }
+  });
+  return huecos;
+}
+
+function adjuntarHuecosHorometro(filas, historialMaquina) {
+  const huecos = mapaHuecosDesdeHistorial(historialMaquina);
+  for (const r of filas) {
+    const h = huecos.get(String(r.id));
+    if (!h) continue;
+    r.hueco_horas = h.horas;
+    r.hueco_horometro_desde = h.desde;
+    r.hueco_horometro_hasta = h.hasta;
+  }
+}
+
 /**
  * Prioriza horómetro para horas/cobro. Reloj es contexto;
  * si ambos existen y difieren, manda el horómetro y se genera aviso.
@@ -507,6 +558,18 @@ app.get('/api/registros', async (req, res) => {
 
     sql += ' ORDER BY r.hora_inicio DESC LIMIT 500';
     const [rows] = await pool.query(sql, params);
+
+    const idsMaq = [...new Set(rows.map((r) => r.id_maquinaria).filter((id) => id != null))];
+    if (idsMaq.length) {
+      const [historialMaq] = await pool.query(
+        `SELECT id, id_maquinaria, horometro_inicio, horometro_fin, hora_inicio
+         FROM registros_trabajo
+         WHERE id_maquinaria IN (?)`,
+        [idsMaq]
+      );
+      adjuntarHuecosHorometro(rows, historialMaq);
+    }
+
     res.json({ data: rows });
   } catch (e) {
     res.status(500).json({ message: e.message });

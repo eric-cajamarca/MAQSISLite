@@ -1160,62 +1160,161 @@ function fmtHorometro(ini, fin) {
   return '—';
 }
 
+function roundHoras2(n) {
+  return Math.round(Number(n) * 100) / 100;
+}
+
 function fechaClaveHistorial(s) {
   if (!s) return '';
   return String(s).replace('T', ' ').slice(0, 10);
 }
 
-function claveIdleHistorial(r) {
+function fmtFechaCorta(s) {
+  const f = fechaClaveHistorial(s);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return f || '—';
+  return `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}`;
+}
+
+function claveDiaMaquina(r) {
   const fecha = fechaClaveHistorial(r.hora_inicio);
   if (!fecha || r.id_maquinaria == null) return '';
   return `${r.id_maquinaria}|${fecha}`;
 }
 
-/** Horas del día (24 h) menos las horas registradas de esa máquina ese día. */
-function mapaHorasNoTrabajadas(registros) {
-  const trabajadas = new Map();
-  for (const r of registros) {
-    if (r.horas == null) continue;
-    const key = claveIdleHistorial(r);
-    if (!key) continue;
-    const prev = trabajadas.get(key) || { horas: 0, cantidad: 0 };
-    prev.horas += Number(r.horas || 0);
-    prev.cantidad += 1;
-    trabajadas.set(key, prev);
-  }
-  const idle = new Map();
-  trabajadas.forEach((info, key) => {
-    idle.set(key, {
-      horas: Math.round(Math.max(0, 24 - info.horas) * 100) / 100,
-      trabajadas: Math.round(info.horas * 100) / 100,
-      cantidad: info.cantidad
-    });
+function tiempoRegistro(r) {
+  const t = new Date(String(r.hora_inicio || '').replace(' ', 'T')).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+/** Orden cronológico de una máquina: horómetro, luego fecha, luego id. */
+function ordenarRegistrosMaquina(arr) {
+  return arr.slice().sort((a, b) => {
+    const ha = Number(a.horometro_inicio);
+    const hb = Number(b.horometro_inicio);
+    if (Number.isFinite(ha) && Number.isFinite(hb) && ha !== hb) return ha - hb;
+    const ta = tiempoRegistro(a);
+    const tb = tiempoRegistro(b);
+    if (ta !== tb) return ta - tb;
+    return Number(a.id) - Number(b.id);
   });
-  return idle;
 }
 
-function totalHorasNoTrabajadas(idleMap) {
-  let total = 0;
-  idleMap.forEach((info) => { total += Number(info.horas) || 0; });
-  return Math.round(total * 100) / 100;
-}
-
-function textoIdleHistorial(info) {
-  if (!info) return '';
-  if (info.cantidad > 1) {
-    return `No trabajó ${info.horas.toFixed(2)} h ese día (${info.trabajadas.toFixed(2)} h en ${info.cantidad} registros)`;
+/**
+ * Hueco de horómetro entre un trabajo y el anterior de la misma máquina.
+ * Se indexa por id del registro más reciente del par (el que empieza después).
+ */
+function mapaHuecosHorometro(registros) {
+  const porMaq = new Map();
+  for (const r of registros) {
+    if (r.id_maquinaria == null) continue;
+    const id = String(r.id_maquinaria);
+    if (!porMaq.has(id)) porMaq.set(id, []);
+    porMaq.get(id).push(r);
   }
-  return `No trabajó ${info.horas.toFixed(2)} h ese día (24 h − ${info.trabajadas.toFixed(2)} h)`;
+  const huecos = new Map();
+  porMaq.forEach((arr) => {
+    const orden = ordenarRegistrosMaquina(arr);
+    for (let i = 1; i < orden.length; i += 1) {
+      const prev = orden[i - 1];
+      const cur = orden[i];
+      const fin = prev.horometro_fin != null && prev.horometro_fin !== '' ? Number(prev.horometro_fin) : NaN;
+      const ini = cur.horometro_inicio != null && cur.horometro_inicio !== '' ? Number(cur.horometro_inicio) : NaN;
+      if (!Number.isFinite(fin) || !Number.isFinite(ini)) continue;
+      const horas = roundHoras2(ini - fin);
+      if (Math.abs(horas) < 0.05) continue;
+      huecos.set(String(cur.id), {
+        horas,
+        horoFinAnt: fin,
+        horoIniAct: ini
+      });
+    }
+  });
+  for (const r of registros) {
+    if (r.hueco_horas == null || r.hueco_horometro_desde == null || r.hueco_horometro_hasta == null) continue;
+    const horas = roundHoras2(r.hueco_horas);
+    if (Math.abs(horas) < 0.05) continue;
+    huecos.set(String(r.id), {
+      horas,
+      horoFinAnt: Number(r.hueco_horometro_desde),
+      horoIniAct: Number(r.hueco_horometro_hasta)
+    });
+  }
+  return huecos;
 }
 
-function htmlFilaIdleHistorial(info) {
-  if (!info) return '';
+function totalHuecosPositivos(huecos) {
+  let total = 0;
+  huecos.forEach((h) => {
+    if (h.horas > 0) total += h.horas;
+  });
+  return roundHoras2(total);
+}
+
+function textoHuecoHistorial(h) {
+  const desde = Number(h.horoFinAnt).toFixed(1);
+  const hasta = Number(h.horoIniAct).toFixed(1);
+  if (h.horas < 0) {
+    return `Horómetro inconsistente: ${Math.abs(h.horas).toFixed(2)} h de solape (${desde} → ${hasta})`;
+  }
+  return `${h.horas.toFixed(2)} h de motor no registradas entre este trabajo y el anterior (${desde} → ${hasta})`;
+}
+
+function htmlFilaHuecoHistorial(h) {
+  if (!h) return '';
+  const alerta = h.horas < 0 ? ' es-alerta' : '';
   return `
-    <tr class="hist-fila-idle">
+    <tr class="hist-fila-hueco${alerta}">
       <td colspan="9">
-        <span class="hist-idle-label">${esc(textoIdleHistorial(info))}</span>
+        <span class="hist-extra-label">${esc(textoHuecoHistorial(h))}</span>
       </td>
     </tr>`;
+}
+
+/** Suma las horas de todos los registros de esa máquina en esa fecha. */
+function mapaTotalesDia(registros) {
+  const map = new Map();
+  for (const r of registros) {
+    const key = claveDiaMaquina(r);
+    if (!key) continue;
+    const prev = map.get(key) || { horas: 0, cantidad: 0, fecha: fechaClaveHistorial(r.hora_inicio) };
+    prev.cantidad += 1;
+    if (r.horas != null) prev.horas += Number(r.horas || 0);
+    map.set(key, prev);
+  }
+  map.forEach((info) => {
+    info.horas = roundHoras2(info.horas);
+  });
+  return map;
+}
+
+function esUltimoDelDia(registros, index) {
+  const key = claveDiaMaquina(registros[index]);
+  if (!key) return false;
+  for (let i = index + 1; i < registros.length; i += 1) {
+    if (claveDiaMaquina(registros[i]) === key) return false;
+  }
+  return true;
+}
+
+function textoTotalDiaHistorial(info) {
+  const regs = info.cantidad === 1 ? '1 registro' : `${info.cantidad} registros`;
+  return `Total del día ${fmtFechaCorta(info.fecha)}: ${info.horas.toFixed(2)} h trabajadas (${regs})`;
+}
+
+function htmlFilaTotalDia(info) {
+  if (!info) return '';
+  return `
+    <tr class="hist-fila-dia">
+      <td colspan="9">
+        <span class="hist-extra-label">${esc(textoTotalDiaHistorial(info))}</span>
+      </td>
+    </tr>`;
+}
+
+function htmlHrsConTotalDia(r, infoDia) {
+  const hrs = r.horas != null ? Number(r.horas).toFixed(2) : '—';
+  if (!infoDia || infoDia.cantidad < 2) return hrs;
+  return `${hrs}<span class="hist-hrs-dia">día ${infoDia.horas.toFixed(2)} h</span>`;
 }
 
 let ultimoHistorial = [];
@@ -1299,15 +1398,15 @@ async function cargarHistorial() {
 
   const totalHoras = ultimoHistorial.reduce((s, r) => s + Number(r.horas || 0), 0);
   const totalMonto = ultimoHistorial.reduce((s, r) => s + Number(r.monto || 0), 0);
-  const idleMap = mapaHorasNoTrabajadas(ultimoHistorial);
-  const totalIdle = totalHorasNoTrabajadas(idleMap);
+  const huecos = mapaHuecosHorometro(ultimoHistorial);
+  const totalesDia = mapaTotalesDia(ultimoHistorial);
   document.getElementById('histCantidad').textContent = String(ultimoHistorial.length);
   document.getElementById('histTotalHoras').textContent = totalHoras.toFixed(2);
-  document.getElementById('histTotalIdle').textContent = totalIdle.toFixed(2);
+  document.getElementById('histTotalHuecos').textContent = totalHuecosPositivos(huecos).toFixed(2);
   document.getElementById('histTotalMonto').textContent = fmtMoney(totalMonto);
 
   const tbody = document.getElementById('tablaHistorial');
-  tbody.innerHTML = ultimoHistorial.map((r) => {
+  tbody.innerHTML = ultimoHistorial.map((r, i) => {
     const acciones = [];
     if (hasPermiso('registrar')) {
       if (r.estado === 'EN_CURSO') {
@@ -1315,7 +1414,12 @@ async function cargarHistorial() {
       }
       acciones.push(`<button type="button" class="btn btn-sm btn-outline-primary" data-editar="${r.id}">Editar</button>`);
     }
-    const infoIdle = idleMap.get(claveIdleHistorial(r));
+    const infoDia = totalesDia.get(claveDiaMaquina(r));
+    const extra = [];
+    if (esUltimoDelDia(ultimoHistorial, i) && infoDia && infoDia.cantidad >= 2) {
+      extra.push(htmlFilaTotalDia(infoDia));
+    }
+    extra.push(htmlFilaHuecoHistorial(huecos.get(String(r.id))));
     return `
     <tr>
       <td>${esc(r.maquinaria_nombre)}<br><small class="text-muted">${esc(r.maquinaria_codigo || '')}</small></td>
@@ -1324,10 +1428,10 @@ async function cargarHistorial() {
       <td class="small">${fmtDt(r.hora_inicio)}</td>
       <td class="small">${r.estado === 'EN_CURSO' ? '<span class="badge bg-warning">En curso</span>' : fmtDt(r.hora_fin)}</td>
       <td class="small">${fmtHorometro(r.horometro_inicio, r.horometro_fin)}</td>
-      <td>${r.horas != null ? Number(r.horas).toFixed(2) : '—'}</td>
+      <td>${htmlHrsConTotalDia(r, infoDia)}</td>
       <td>${r.monto != null ? fmtMoney(r.monto) : '—'}</td>
       <td class="text-nowrap">${acciones.join(' ')}</td>
-    </tr>${htmlFilaIdleHistorial(infoIdle)}`;
+    </tr>${extra.join('')}`;
   }).join('') || '<tr><td colspan="9" class="text-muted">Sin registros con estos filtros</td></tr>';
 
   tbody.querySelectorAll('[data-cerrar]').forEach((btn) => {
@@ -1367,14 +1471,27 @@ function exportarPdfHistorial() {
 
     const totalHoras = filas.reduce((s, r) => s + Number(r.horas || 0), 0);
     const totalMonto = filas.reduce((s, r) => s + Number(r.monto || 0), 0);
-    const idleMap = mapaHorasNoTrabajadas(filas);
-    const totalIdle = totalHorasNoTrabajadas(idleMap);
+    const huecos = mapaHuecosHorometro(filas);
+    const totalesDia = mapaTotalesDia(filas);
+    const totalHuecos = totalHuecosPositivos(huecos);
+
+    const filaExtraPdf = (texto, fill, color) => ([{
+      content: texto,
+      colSpan: 8,
+      styles: {
+        fillColor: fill,
+        textColor: color,
+        fontStyle: 'italic',
+        fontSize: 7
+      }
+    }]);
 
     const body = [];
     if (!filas.length) {
       body.push(['Sin registros', '', '', '', '', '', '', '']);
     } else {
-      filas.forEach((r) => {
+      filas.forEach((r, i) => {
+        const infoDia = totalesDia.get(claveDiaMaquina(r));
         body.push([
           `${r.maquinaria_nombre || ''}${r.maquinaria_codigo ? ` (${r.maquinaria_codigo})` : ''}`,
           r.cliente_nombre || '-',
@@ -1385,18 +1502,17 @@ function exportarPdfHistorial() {
           r.horas != null ? Number(r.horas).toFixed(2) : '-',
           r.monto != null ? fmtMoneyPdf(r.monto) : '-'
         ]);
-        const infoIdle = idleMap.get(claveIdleHistorial(r));
-        if (infoIdle) {
-          body.push([{
-            content: textoIdleHistorial(infoIdle),
-            colSpan: 8,
-            styles: {
-              fillColor: [255, 248, 225],
-              textColor: [180, 83, 9],
-              fontStyle: 'italic',
-              fontSize: 7
-            }
-          }]);
+        if (esUltimoDelDia(filas, i) && infoDia && infoDia.cantidad >= 2) {
+          body.push(filaExtraPdf(textoTotalDiaHistorial(infoDia), [238, 246, 255], [23, 92, 211]));
+        }
+        const hueco = huecos.get(String(r.id));
+        if (hueco) {
+          const alerta = hueco.horas < 0;
+          body.push(filaExtraPdf(
+            textoHuecoHistorial(hueco),
+            alerta ? [253, 232, 232] : [255, 248, 225],
+            alerta ? [180, 35, 24] : [180, 83, 9]
+          ));
         }
       });
       body.push([
@@ -1405,11 +1521,11 @@ function exportarPdfHistorial() {
         totalHoras.toFixed(2),
         fmtMoneyPdf(totalMonto)
       ]);
-      body.push([{
-        content: `Sin trabajar: ${totalIdle.toFixed(2)} h (suma de dias con registro)`,
-        colSpan: 8,
-        styles: { fontStyle: 'bold', fillColor: [255, 248, 225], textColor: [180, 83, 9] }
-      }]);
+      body.push(filaExtraPdf(
+        `Huecos de horometro (motor no registrado): ${totalHuecos.toFixed(2)} h`,
+        [255, 248, 225],
+        [180, 83, 9]
+      ));
     }
 
     doc.autoTable({

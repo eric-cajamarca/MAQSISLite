@@ -1160,6 +1160,64 @@ function fmtHorometro(ini, fin) {
   return '—';
 }
 
+function fechaClaveHistorial(s) {
+  if (!s) return '';
+  return String(s).replace('T', ' ').slice(0, 10);
+}
+
+function claveIdleHistorial(r) {
+  const fecha = fechaClaveHistorial(r.hora_inicio);
+  if (!fecha || r.id_maquinaria == null) return '';
+  return `${r.id_maquinaria}|${fecha}`;
+}
+
+/** Horas del día (24 h) menos las horas registradas de esa máquina ese día. */
+function mapaHorasNoTrabajadas(registros) {
+  const trabajadas = new Map();
+  for (const r of registros) {
+    if (r.horas == null) continue;
+    const key = claveIdleHistorial(r);
+    if (!key) continue;
+    const prev = trabajadas.get(key) || { horas: 0, cantidad: 0 };
+    prev.horas += Number(r.horas || 0);
+    prev.cantidad += 1;
+    trabajadas.set(key, prev);
+  }
+  const idle = new Map();
+  trabajadas.forEach((info, key) => {
+    idle.set(key, {
+      horas: Math.round(Math.max(0, 24 - info.horas) * 100) / 100,
+      trabajadas: Math.round(info.horas * 100) / 100,
+      cantidad: info.cantidad
+    });
+  });
+  return idle;
+}
+
+function totalHorasNoTrabajadas(idleMap) {
+  let total = 0;
+  idleMap.forEach((info) => { total += Number(info.horas) || 0; });
+  return Math.round(total * 100) / 100;
+}
+
+function textoIdleHistorial(info) {
+  if (!info) return '';
+  if (info.cantidad > 1) {
+    return `No trabajó ${info.horas.toFixed(2)} h ese día (${info.trabajadas.toFixed(2)} h en ${info.cantidad} registros)`;
+  }
+  return `No trabajó ${info.horas.toFixed(2)} h ese día (24 h − ${info.trabajadas.toFixed(2)} h)`;
+}
+
+function htmlFilaIdleHistorial(info) {
+  if (!info) return '';
+  return `
+    <tr class="hist-fila-idle">
+      <td colspan="9">
+        <span class="hist-idle-label">${esc(textoIdleHistorial(info))}</span>
+      </td>
+    </tr>`;
+}
+
 let ultimoHistorial = [];
 let filtrosHistorial = {};
 
@@ -1241,8 +1299,11 @@ async function cargarHistorial() {
 
   const totalHoras = ultimoHistorial.reduce((s, r) => s + Number(r.horas || 0), 0);
   const totalMonto = ultimoHistorial.reduce((s, r) => s + Number(r.monto || 0), 0);
+  const idleMap = mapaHorasNoTrabajadas(ultimoHistorial);
+  const totalIdle = totalHorasNoTrabajadas(idleMap);
   document.getElementById('histCantidad').textContent = String(ultimoHistorial.length);
   document.getElementById('histTotalHoras').textContent = totalHoras.toFixed(2);
+  document.getElementById('histTotalIdle').textContent = totalIdle.toFixed(2);
   document.getElementById('histTotalMonto').textContent = fmtMoney(totalMonto);
 
   const tbody = document.getElementById('tablaHistorial');
@@ -1254,6 +1315,7 @@ async function cargarHistorial() {
       }
       acciones.push(`<button type="button" class="btn btn-sm btn-outline-primary" data-editar="${r.id}">Editar</button>`);
     }
+    const infoIdle = idleMap.get(claveIdleHistorial(r));
     return `
     <tr>
       <td>${esc(r.maquinaria_nombre)}<br><small class="text-muted">${esc(r.maquinaria_codigo || '')}</small></td>
@@ -1265,7 +1327,7 @@ async function cargarHistorial() {
       <td>${r.horas != null ? Number(r.horas).toFixed(2) : '—'}</td>
       <td>${r.monto != null ? fmtMoney(r.monto) : '—'}</td>
       <td class="text-nowrap">${acciones.join(' ')}</td>
-    </tr>`;
+    </tr>${htmlFilaIdleHistorial(infoIdle)}`;
   }).join('') || '<tr><td colspan="9" class="text-muted">Sin registros con estos filtros</td></tr>';
 
   tbody.querySelectorAll('[data-cerrar]').forEach((btn) => {
@@ -1305,27 +1367,49 @@ function exportarPdfHistorial() {
 
     const totalHoras = filas.reduce((s, r) => s + Number(r.horas || 0), 0);
     const totalMonto = filas.reduce((s, r) => s + Number(r.monto || 0), 0);
+    const idleMap = mapaHorasNoTrabajadas(filas);
+    const totalIdle = totalHorasNoTrabajadas(idleMap);
 
-    const body = filas.length
-      ? filas.map((r) => [
-        `${r.maquinaria_nombre || ''}${r.maquinaria_codigo ? ` (${r.maquinaria_codigo})` : ''}`,
-        r.cliente_nombre || '-',
-        (r.ubicacion || '').trim() || '-',
-        fmtFechaPdf(r.hora_inicio),
-        r.estado === 'EN_CURSO' ? 'En curso' : fmtFechaPdf(r.hora_fin),
-        fmtHorometro(r.horometro_inicio, r.horometro_fin).replace('—', '-'),
-        r.horas != null ? Number(r.horas).toFixed(2) : '-',
-        r.monto != null ? fmtMoneyPdf(r.monto) : '-'
-      ])
-      : [['Sin registros', '', '', '', '', '', '', '']];
-
-    if (filas.length) {
+    const body = [];
+    if (!filas.length) {
+      body.push(['Sin registros', '', '', '', '', '', '', '']);
+    } else {
+      filas.forEach((r) => {
+        body.push([
+          `${r.maquinaria_nombre || ''}${r.maquinaria_codigo ? ` (${r.maquinaria_codigo})` : ''}`,
+          r.cliente_nombre || '-',
+          (r.ubicacion || '').trim() || '-',
+          fmtFechaPdf(r.hora_inicio),
+          r.estado === 'EN_CURSO' ? 'En curso' : fmtFechaPdf(r.hora_fin),
+          fmtHorometro(r.horometro_inicio, r.horometro_fin).replace('—', '-'),
+          r.horas != null ? Number(r.horas).toFixed(2) : '-',
+          r.monto != null ? fmtMoneyPdf(r.monto) : '-'
+        ]);
+        const infoIdle = idleMap.get(claveIdleHistorial(r));
+        if (infoIdle) {
+          body.push([{
+            content: textoIdleHistorial(infoIdle),
+            colSpan: 8,
+            styles: {
+              fillColor: [255, 248, 225],
+              textColor: [180, 83, 9],
+              fontStyle: 'italic',
+              fontSize: 7
+            }
+          }]);
+        }
+      });
       body.push([
         `Total (${filas.length})`,
         '', '', '', '', '',
         totalHoras.toFixed(2),
         fmtMoneyPdf(totalMonto)
       ]);
+      body.push([{
+        content: `Sin trabajar: ${totalIdle.toFixed(2)} h (suma de dias con registro)`,
+        colSpan: 8,
+        styles: { fontStyle: 'bold', fillColor: [255, 248, 225], textColor: [180, 83, 9] }
+      }]);
     }
 
     doc.autoTable({
@@ -1340,7 +1424,10 @@ function exportarPdfHistorial() {
         7: {halign: 'right', textColor: [25, 135, 84] }
       },
       didParseCell(hook) {
-        if (hook.section === 'body' && filas.length && hook.row.index === body.length - 1) {
+        if (hook.section !== 'body' || !filas.length) return;
+        const first = hook.row.raw && hook.row.raw[0];
+        const esTotal = typeof first === 'string' && first.startsWith('Total (');
+        if (esTotal) {
           hook.cell.styles.fontStyle = 'bold';
           hook.cell.styles.fillColor = [248, 249, 250];
         }

@@ -134,3 +134,23 @@ body { background: #f0f2f5; }
   .cal-day { min-height: 3.6rem; padding: 0.35rem; }
   .cal-day-num { font-size: 0.9rem; }
 }
+
+/* Historial: horas sin trabajar debajo de cada registro */
+#tablaHistorial tr.hist-fila-idle td {
+  background: #fff8e1 !important;
+  border-top: 0;
+  padding-top: 0.15rem;
+  padding-bottom: 0.4rem;
+}
+.hist-idle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #b45309;
+}
+.hist-idle-label::before {
+  content: "⏸";
+  font-size: 0.75rem;
+}
